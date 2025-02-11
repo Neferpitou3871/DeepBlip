@@ -1,0 +1,20 @@
+#Ignore python byte code, including all the pycache directories
+__pycache__/
+*.pyc
+
+*.log
+*.tmp
+*.swp
+
+#other directories / output
+.vscode/
+mlartifacts/
+mlruns/
+outputs/
+multirun/
+
+#old files
+scripts/old_train_dml_rnn.pyc
+scripts/old_train_dml.py
+scripts/in_place.py
+
