@@ -1,0 +1,37 @@
+# @package _global_
+model:
+  static_treatment_policy: [0, 0, 0]
+  phi_type: 'current_treatment'
+  hidden_size: 50
+  num_layer: 1
+  hr_size: 30
+  dropout_rate: 0.1
+  fc_hidden_size_p: 15
+  fc_hidden_size_q: 15
+  fc_hidden_size_psi: 15
+  dim_phi: 1
+  loss_type: 'moment'  #moment or OLS
+  moment_order: 1 # 1 for L1, 2 for L2-norm in moment loss
+  double_opt: True
+
+  optimizer:
+    optimizer_cls: adam
+    learning_rate: 0.001
+    weight_decay: 0.0
+    lr_scheduler: False
+
+exp:
+  kfold: 3
+  max_epochs_nuisance: 15                   # Number of epochs
+  max_epochs_de: 1
+  fit_dml: False
+  plot_residual: True
+  load_pretrained: True                     #load pretrained model for nuiisance network
+  exp_id: "107733509644077161"
+  nuisance_run_ids:
+    - "665ce54966ae4c91827b1a6f876e27f2"
+    - "b3f93bc416e14db3b89f0f715f188505"
+    - "3a72b423695f42b88996b3ce7941c881"
+  resume_train: False
+  use_regression_residual: False
+  residual_dir: 'C:\Users\mhr_k\OneDrive\Documents\Thesis\Neural-R-Learner\mlruns\819398713364716680\3da1695f9b94424b87c1ef07fa8dfbdb\artifacts'

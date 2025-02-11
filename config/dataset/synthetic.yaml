@@ -1,0 +1,20 @@
+n_units: 2000
+n_periods: 3
+sequence_length: 10
+n_x: 50
+n_treatments: 1
+s_x: 40
+s_t: 1
+sigma_x: 0.5
+sigma_t: 0.5
+sigma_y: 1.0
+gamma: 0.2
+autoreg: 0.25
+state_effect: 0.25
+hetero_strength: 0.5
+hetero_inds: [40, 41, 42, 43, 44, 45, 46, 47, 48, 49]
+conf_str: 5
+seed: 2024
+train_val_split: 0.8
+
+
