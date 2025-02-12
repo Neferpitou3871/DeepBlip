@@ -16,16 +16,27 @@ logger = logging.getLogger(__name__)
 #ray_constants.FUNCTION_SIZE_ERROR_THRESHOLD = 10**8  # ~ 100Mb
 
 class OutcomeHead(nn.Module):
-    def __init__(self, hidden_size, fc_hidden_size, dim_outcome=1):
+    def __init__(self, hidden_size, fc_hidden_size, dim_outcome=1, dim_outcome_disc=0):
         super().__init__()
+        self.dim_outcome = dim_outcome
+        self.dim_outcome_disc = dim_outcome_disc
+        self.dim_outcome_cont = dim_outcome - dim_outcome_disc
         self.linear1 = nn.Linear(hidden_size, fc_hidden_size)
         self.elu = nn.ELU()
         self.linear2 = nn.Linear(fc_hidden_size, dim_outcome)
         self.trainable_params = ['linear1', 'linear2']
     
     def build_outcome(self, hr):
+        """
+        hr: hidden representation of patient state, shape (b, hr_size)
+        returns: outcome, shape (b, dim_outcome)
+        """
         x = self.elu(self.linear1(hr))
         outcome = self.linear2(x)
+        #first dim_outcome_disc elements need to be transformed to [0, 1] through sigmoid function
+        if self.dim_outcome_disc > 0:
+            prob = torch.sigmoid(outcome[:, :self.dim_outcome_disc])
+            outcome = torch.concat([prob, outcome[:, self.dim_outcome_disc:]], dim = -1)
         return outcome
 
 class Nuisance_Network(LightningModule):
@@ -35,15 +46,21 @@ class Nuisance_Network(LightningModule):
         Args:
             args: DictConfig of model hyperparameters
             phi: function ()
+        note1: currently only support the case where phi is the current treatment
+        note2: currently only support binary type for discrete treatment
         """
         super().__init__()
         dataset_params = args.dataset
         self.model_type = 'nuisace parameter network'
         self.n_treatments = dataset_params['n_treatments']
+        self.n_treatments_disc = dataset_params.get('n_treatments_disc', 0)
+        self.n_treatments_cont = dataset_params.get('n_treatments_cont', 0)
+        assert self.n_treatments == self.n_treatments_disc + self.n_treatments_cont
         self.n_x = dataset_params['n_x']
+        self.n_static = dataset_params.get('n_static', 0)
         self.n_periods = dataset_params['n_periods']
         self.static_treatment_policy = torch.tensor(args.model.static_treatment_policy, dtype=torch.float32)
-        self.input_size = self.n_treatments + self.n_x + 1
+        self.input_size = self.n_treatments + self.n_x + self.n_static + 1
         self.sequence_length = dataset_params['sequence_length']
         self.phi = build_phi(args.model.phi_type)
         self.phi_type = args.model.phi_type
@@ -71,16 +88,19 @@ class Nuisance_Network(LightningModule):
         ])
         self.q_comp_head = nn.ModuleList([
             nn.ModuleList([
-                OutcomeHead(self.hr_size, self.fc_hidden_size_q, self.dim_phi) if k >= p else nn.Module() for k in range(self.n_periods)
+                OutcomeHead(self.hr_size, self.fc_hidden_size_q, self.dim_phi, self.n_treatments_disc) 
+                if k >= p else nn.Module() for k in range(self.n_periods)
             ]) for p in range(self.n_periods)
         ])
     
 
-    def build_hr(self, curr_covariates, prev_treatments, prev_outputs):
+    def build_hr(self, static_features, curr_covariates, prev_treatments, prev_outputs):
         """
         Build hidden representation (patient clinical state)
         """
-        x = torch.cat([curr_covariates, prev_treatments, prev_outputs.unsqueeze(-1)], dim = -1)
+        #expand static_features along the time dimension (b, n_static) -> (b, L, n_static)
+        static_features = static_features.unsqueeze(1).expand(-1, self.sequence_length, -1)   
+        x = torch.cat([static_features, curr_covariates, prev_treatments, prev_outputs.unsqueeze(-1)], dim = -1)
         x = self.lstm(x, init_states=None)
         output = self.output_dropout(x)
         hr = nn.ELU()(self.hr_output_transformation(output))
@@ -106,9 +126,16 @@ class Nuisance_Network(LightningModule):
         batch info:
         prev_treatments: torch.tensor shape (b, L, n_treatments)
         prev_outpus: torch.tensor shape (b, L, 1)
+        returns:
+        p_pred_all_steps: torch.tensor shape (b, SL - m + 1, m)
+        q_pred_all_steps: torch.tensor shape (b, SL - m + 1, m, m, disc_dim + cont_dim), the discrete dim outputs are in [0, 1]
         """
-        prev_treatments = batch['prev_treatments']
-        curr_treatments = batch['curr_treatments']
+        prev_outputs = batch['prev_outputs']
+        b, L = prev_outputs.size(0), prev_outputs.size(1)
+        prev_treatments_disc = batch['prev_treatments_disc'] if self.n_treatments_disc > 0 else torch.zeros((b, L, 0), device=self.device)
+        prev_treatments_cont = batch['prev_treatments_cont'] if self.n_treatments_cont > 0 else torch.zeros((b, L, 0), device=self.device)
+        prev_treatments = torch.cat([prev_treatments_disc, prev_treatments_cont], dim = -1)
+        static_features = batch['static_features'] if self.n_static > 0 else torch.zeros((b, 0), device=self.device)
         curr_covariates = batch['curr_covariates']
         prev_outputs = batch['prev_outputs']
         batch_size = prev_treatments.size(0)
@@ -118,7 +145,7 @@ class Nuisance_Network(LightningModule):
                                         self.n_periods, self.n_periods, self.dim_phi), device=self.device)
         #q_res_all_steps = torch.zeros((batch_size, self.sequence_length - self.n_periods + 1, self.n_periods), device = self.device)
         
-        hr = self.build_hr(curr_covariates, prev_treatments, prev_outputs) # dim = (b, L. hr_size)
+        hr = self.build_hr(static_features, curr_covariates, prev_treatments, prev_outputs) # dim = (b, L. hr_size)
         for t in range(self.sequence_length - self.n_periods + 1): # t = 0, 1, ., L - m
             for l in range(self.n_periods): #l = 0, 1, . ., m - 1
                 p_pred_all_steps[:, t, l] = self.p_comp_head[l].build_outcome(hr[:, t + l, :]).squeeze(-1)
@@ -135,46 +162,90 @@ class Nuisance_Network(LightningModule):
     
     def training_step(self, batch, batch_ind, optimizer_idx=None):
 
-        curr_treatments = batch['curr_treatments']
-        curr_covariates = batch['curr_covariates']
         curr_outputs = batch['curr_outputs']
+        b, L = curr_outputs.size(0), curr_outputs.size(1)
+        curr_treatments_disc = batch['curr_treatments_disc'] if self.n_treatments_disc > 0 else torch.zeros((b, L, 0), device=self.device)
+        curr_treatments_cont = batch['curr_treatments_cont'] if self.n_treatments_cont > 0 else torch.zeros((b, L, 0), device=self.device)
+        curr_treatments = torch.cat([curr_treatments_disc, curr_treatments_cont], dim = -1)
+        curr_covariates = batch['curr_covariates']
+        active_entries = batch['active_entries']
 
         p_pred_all_steps, q_pred_all_steps = self.forward(batch)
+        #separate q_pred_all_steps / q_gt_all_steps to disc and cont
+        q_pred_all_steps_disc = q_pred_all_steps[:, :, :, :, :self.n_treatments_disc]
+        q_pred_all_steps_cont = q_pred_all_steps[:, :, :, :, self.n_treatments_disc:]
+
         Q_gt_all_steps = self.compute_Q(curr_covariates, curr_treatments)
+        Q_gt_all_steps_disc = Q_gt_all_steps[:, :, :, :, :self.n_treatments_disc]
+        Q_gt_all_steps_cont = Q_gt_all_steps[:, :, :, :, self.n_treatments_disc:]
         p_target = curr_outputs[:, self.n_periods - 1:].unsqueeze(-1).expand(-1, -1, self.n_periods)
 
-        p_mse = F.mse_loss(p_pred_all_steps, p_target, reduction='none').mean(dim=(0, 1))
-        q_mse = F.mse_loss(q_pred_all_steps, Q_gt_all_steps, reduction='none').mean(dim=(0, 1, -1))
-
+        p_mse = (F.mse_loss(p_pred_all_steps, p_target, reduction='none') * active_entries).mean(dim = (0, 1))
         for i in range(p_mse.shape[0]):
             self.log(f'p{i}_mse', p_mse[i], on_epoch=True, on_step=False, sync_dist=True, prog_bar=True)
-        for i in range(q_mse.shape[0]):
-            for j in range(i, q_mse.shape[1]):
-                self.log(f"q{j}{i}_mse", q_mse[i][j], on_epoch=True, on_step=False, sync_dist=True, prog_bar=True)
         
-        loss = p_mse.mean() + q_mse.mean()
+        upper_traingle_mask = torch.triu(torch.ones((self.n_periods, self.n_periods), dtype=torch.bool, device = self.device))
+        q_bce, q_mse = 0, 0
+        if self.n_treatments_disc > 0:
+            #compute the binary cross entropy loss for the discrete treatments (Since we only implement for binary treatment)
+            q_pred_disc = q_pred_all_steps_disc[:, :, upper_traingle_mask, :]
+            q_target_disc = Q_gt_all_steps_disc[:, :, upper_traingle_mask, :]
+            q_bce = F.binary_cross_entropy(q_pred_disc, q_target_disc, reduction = 'none').mean(dim = (0, 1, 2))
+            self.log('q_bce', q_bce, on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
+        if self.n_treatments_cont > 0:
+            q_pred_cont = q_pred_all_steps_cont[:, :, upper_traingle_mask, :]
+            q_target_cont = Q_gt_all_steps_cont[:, :, upper_traingle_mask, :]
+            q_mse = F.mse_loss(q_pred_cont, q_target_cont, reduction='none').mean(dim = (0, 1, 2))
+            self.log('q_mse', q_mse, on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
+        
+        loss = q_bce + q_mse + p_mse.mean()
         self.log('train_loss', loss, on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
         return loss
     
     def validation_step(self, batch, batch_ind):
-        curr_treatments = batch['curr_treatments']
-        curr_covariates = batch['curr_covariates']
+
         curr_outputs = batch['curr_outputs']
+        b, L = curr_outputs.size(0), curr_outputs.size(1)
+        curr_treatments_disc = batch['curr_treatments_disc'] if self.n_treatments_disc > 0 else torch.zeros((b, L, 0), device=self.device)
+        curr_treatments_cont = batch['curr_treatments_cont'] if self.n_treatments_cont > 0 else torch.zeros((b, L, 0), device=self.device)
+        curr_treatments = torch.cat([curr_treatments_disc, curr_treatments_cont], dim = -1)
+        curr_covariates = batch['curr_covariates']
+        active_entries = batch['active_entries']
 
         p_pred_all_steps, q_pred_all_steps = self.forward(batch)
         Q_gt_all_steps = self.compute_Q(curr_covariates, curr_treatments)
         p_target = curr_outputs[:, self.n_periods - 1:].unsqueeze(-1).expand(-1, -1, self.n_periods)
 
-        p_mse = F.mse_loss(p_pred_all_steps, p_target, reduction='none').mean(dim=(0, 1))
-        q_mse = F.mse_loss(q_pred_all_steps, Q_gt_all_steps, reduction='none').mean(dim=(0, 1, -1))
-
+        #Do similar thing as in training_step
+        p_mse = (F.mse_loss(p_pred_all_steps, p_target, reduction='none') * active_entries).mean(dim = (0, 1))
         for i in range(p_mse.shape[0]):
             self.log(f'val_p{i}_mse', p_mse[i], on_epoch=True, on_step=False, sync_dist=True, prog_bar=True)
-        for i in range(q_mse.shape[0]):
-            for j in range(i, q_mse.shape[1]):
-                self.log(f"val_q{j}{i}_mse", q_mse[i][j], on_epoch=True, on_step=False, sync_dist=True, prog_bar=True)
         
-        loss = p_mse.mean() + q_mse.mean()
+        upper_traingle_mask = torch.triu(torch.ones((self.n_periods, self.n_periods), dtype=torch.bool, device = self.device))
+        q_bce, q_mse = 0, 0
+        if self.n_treatments_disc > 0:
+            q_pred_disc = q_pred_all_steps[:, :, upper_traingle_mask, :self.n_treatments_disc]
+            q_target_disc = Q_gt_all_steps[:, :, upper_traingle_mask, :self.n_treatments_disc]
+            q_bce = F.binary_cross_entropy(q_pred_disc, q_target_disc, reduction = 'none').mean(dim = (0, 1))
+            for i in range(q_bce.shape[0]):
+                self.log(f'val_q{i}[.]_bce', q_bce[i], on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
+        if self.n_treatments_cont > 0:
+            q_pred_cont = q_pred_all_steps[:, :, upper_traingle_mask, self.n_treatments_disc:]
+            q_target_cont = Q_gt_all_steps[:, :, upper_traingle_mask, self.n_treatments_disc:]
+            q_mse = F.mse_loss(q_pred_cont, q_target_cont, reduction='none').mean(dim = (0, 1))
+            for i in range(q_mse.shape[0]):
+                self.log(f'val_q{i}[.]_mse', q_mse[i], on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
+
+        #p_mse = F.mse_loss(p_pred_all_steps, p_target, reduction='none').mean(dim=(0, 1))
+        #q_mse = F.mse_loss(q_pred_all_steps, Q_gt_all_steps, reduction='none').mean(dim=(0, 1, -1))
+
+        #for i in range(p_mse.shape[0]):
+        #    self.log(f'val_p{i}_mse', p_mse[i], on_epoch=True, on_step=False, sync_dist=True, prog_bar=True)
+        #for i in range(q_mse.shape[0]):
+        #    for j in range(i, q_mse.shape[1]):
+        #        self.log(f"val_q{j}{i}_mse", q_mse[i][j], on_epoch=True, on_step=False, sync_dist=True, prog_bar=True)
+        
+        loss = p_mse.mean() + q_mse + q_bce
         self.log('val_loss', loss, on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
         return loss
 
@@ -470,7 +541,7 @@ class DynamicEffect_estimator(LightningModule):
             metrics[f'param_rmse{i}'] = rmse_i
         return metrics
     
-    def predict_treatment_effect(self, dynamic_effects, T_intv, T_base):
+    def predict_treatment_effect(self, dynamic_effects, T_intv_disc, T_intv_cont, T_base_disc, T_base_cont):
         """
         Estimate treatment effect E[Y(T_intv) - Y^(T_base)]
         Args:
@@ -479,6 +550,8 @@ class DynamicEffect_estimator(LightningModule):
         Returns:
             treatment effect: numpy array (N, SL - m + 1)
         """
+        T_intv = self._combine_disc_cont(T_intv_disc, T_intv_cont)
+        T_base = self._combine_disc_cont(T_base_disc, T_base_cont)
         de = dynamic_effects.detach().cpu().numpy()
         T_diff = (T_intv - T_base).reshape((1, 1, T_intv.shape[0], T_intv.shape[1]))
         return (de * T_diff).sum((-2, -1))
@@ -495,6 +568,18 @@ class DynamicEffect_estimator(LightningModule):
             raise ValueError(f"Unsupported optimizer: {optimizer_cls.lower()}")
 
         return optimizer
+    
+    def _combine_disc_cont(self, T_disc, T_cont):
+        """
+        Combine discrete and continuous treatments
+        """
+        if T_disc is None:
+            return T_cont
+        elif T_cont is None:
+            return T_disc
+        else:
+            assert T_disc.shape[:-1] == T_cont.shape[:-1]
+            return torch.cat([T_disc, T_cont], dim = -1)
 
         
 

@@ -8,7 +8,7 @@ from hydra.utils import instantiate, get_original_cwd
 from pytorch_lightning.utilities.seed import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from src.utils import FilteringMlFlowLogger
-from src.data.synthetic_dataset import MarkovianHeteroDynamicDataset
+from src.data.linear_synthetic import MarkovianHeteroDynamicDataset
 from src.models.dml import HeteroDynamicPanelDML, DynamicPanelDML
 from src.models.utils import dataset_to_array, preprocess_data_for_dml, evaluate_nuisance_mse, plot_residual_distribution
 from src.utils import log_params_from_omegaconf_dict

@@ -10,7 +10,7 @@ from pytorch_lightning import Trainer
 from pytorch_lightning.utilities.seed import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from src.utils import FilteringMlFlowLogger
-from src.data.synthetic_dataset import MarkovianHeteroDynamicDataset
+from src.data.linear_synthetic import MarkovianHeteroDynamicDataset
 from src.models.dml_rnn import Nuisance_Network, DynamicEffect_estimator
 from src.models.dml import HeteroDynamicPanelDML
 from src.models.utils import evaluate_nuisance_mse, plot_residual_distribution, plot_de_est_distribution, transform_residual_data
@@ -28,76 +28,53 @@ def main(args: DictConfig):
     OmegaConf.set_struct(args, False)
     logger.info('\n' + OmegaConf.to_yaml(args, resolve=True))
     seed_everything(args.exp.seed)
-    #create dataset
-    hddataset = MarkovianHeteroDynamicDataset(params=args.dataset)
-    Y, T, X = hddataset.generate_observational_data(policy=None,  seed=args.dataset.get('seed', 2024))
-    full_dataset = hddataset.get_full_dataset(Y, T, X)
-
-    kf = KFold(
-        n_splits=args.exp.kfold,
-        shuffle=True,
-        random_state=args.exp.seed
-    )
-    #Place holders of residuals
-    N, SL, m, n_t = args.dataset.n_units, args.dataset.sequence_length, args.dataset.n_periods, args.dataset.n_treatments
-    all_res_Y = np.zeros((N, SL - m + 1, m))
-    all_res_T = np.zeros((N, SL - m + 1, m, m, n_t))
-
+    #instantiate dataset pipeline
+    data_pipeline = instantiate(args.dataset, _recursive_=True)
+    external_val_res_Y, external_val_res_T_disc, external_val_res_T_cont = list(), list(), list()
     if args.exp.use_regression_residual == False:
-        for fold_idx, (train_idx, val_idx) in enumerate(kf.split(np.arange(len(full_dataset)))):
+        #k-fold cross-validation for nuisance network (Only on training set)
+        for fold_idx, (train_data, val_data) in enumerate(data_pipeline.kfold_split(args.exp.kfold)):
             logger.info(f"Nuisance training: Starting fold {fold_idx} out of {args.exp.kfold} folds ...")
 
             if args.exp.logging:
                 experiment_name = args.exp.exp_name
-                mlf_logger_fold = FilteringMlFlowLogger(
-                    filter_submodels=[],
-                    experiment_name=experiment_name,
-                    tracking_uri=args.exp.mlflow_uri,
-                    run_name=f"nuisance_kfold_seed{args.dataset.seed}_fold{fold_idx}"
-                )
+                mlf_logger_fold = FilteringMlFlowLogger(filter_submodels=[], experiment_name=experiment_name,
+                    tracking_uri=args.exp.mlflow_uri, run_name=f"nuisance_{args.exp.kfold}foldcv_fold{fold_idx}")
+                
                 artifacts_path_fold = hydra.utils.to_absolute_path(
                     mlf_logger_fold.experiment.get_run(
-                        mlf_logger_fold.run_id
-                    ).info.artifact_uri
-                ).replace('mlflow-artifacts:', 'mlruns')
+                        mlf_logger_fold.run_id).info.artifact_uri).replace('mlflow-artifacts:', 'mlruns')
                 logger.info(f"Artifacts path nuisance fold {fold_idx}: {artifacts_path_fold}")
             else:
                 mlf_logger_fold = None
                 artifacts_path_fold = None
 
-            train_dataset = Subset(full_dataset, train_idx)
-            val_dataset   = Subset(full_dataset, val_idx)
             train_loader = DataLoader(
-                train_dataset,batch_size=args.exp.batch_size,shuffle=False,num_workers=args.exp.num_workers,drop_last=False
+                train_data,batch_size=args.exp.batch_size,shuffle=False,num_workers=args.exp.num_workers,drop_last=False
             )
             val_loader = DataLoader(
-                val_dataset,batch_size=args.exp.batch_size,shuffle=False,num_workers=args.exp.num_workers,drop_last=False
+                val_data,batch_size=args.exp.batch_size,shuffle=False,num_workers=args.exp.num_workers,drop_last=False
             )
             if args.exp.load_pretrained:
                 assert len(args.exp.nuisance_run_ids) == args.exp.kfold
                 run_id = args.exp.nuisance_run_ids[fold_idx]
-                base_exp_dir = hydra.utils.to_absolute_path(f"mlruns/{args.exp.exp_id}")
-                run_dir = os.path.join(base_exp_dir, run_id)
+                run_dir = os.path.join(hydra.utils.to_absolute_path(f"mlruns/{args.exp.exp_id}"), run_id)
                 artifacts_dir = os.path.join(run_dir, 'artifacts')
                 ckpts = [f for f in os.listdir(artifacts_dir) if f.endswith('ckpt')]
                 if len(ckpts) == 0:
                     raise FileNotFoundError(f"No checkpoint found in {artifacts_dir}")
                 checkpoint_path = os.path.join(artifacts_dir, ckpts[0])
                 nuisance_rnn = Nuisance_Network.load_from_checkpoint(checkpoint_path=checkpoint_path)
-                logger.info(f"Loaded checkpoint from {checkpoint_path}")
+                logger.info(f"Loaded checkpoint from {checkpoint_path} for fold {fold_idx}")
             else:
                 nuisance_rnn = Nuisance_Network(args)
         
             #define callbacks
             dml_rnn_callbacks = []
             if args.checkpoint.save:
-                checkpoint_callback = ModelCheckpoint(
-                    dirpath = artifacts_path_fold,           
+                checkpoint_callback = ModelCheckpoint(dirpath = artifacts_path_fold,           
                     filename = "fold" + str(fold_idx) + "-nuisance-{epoch}-{val_loss:.4f}",
-                    monitor = args.checkpoint.monitor_nuisance,               
-                    mode = "min",                       
-                    save_top_k = args.checkpoint.top_k,
-                    verbose = True                      
+                    monitor = args.checkpoint.monitor_nuisance, mode = "min", save_top_k = args.checkpoint.top_k, verbose = True                      
                 )
                 dml_rnn_callbacks.append(checkpoint_callback)
             dml_rnn_callbacks += [LearningRateMonitor(logging_interval='epoch')]
@@ -115,42 +92,51 @@ def main(args: DictConfig):
             if (args.exp.resume_train) or (args.exp.load_pretrained == False):
                 trainer.fit(nuisance_rnn, train_loader, val_loader)
 
-            
             logger.info(f"fold{fold_idx}: Begin residual inference using trained nuisance network")
             predictions = trainer.predict(nuisance_rnn, val_loader)
             fold_res_Y_val = torch.cat([p[0] for p in predictions], dim=0)
-            fold_res_T_val = torch.cat([p[1] for p in predictions], dim=0)
+            fold_res_T_val_disc = torch.cat([p[1] for p in predictions], dim=0) if predictions[0][1] is not None else None
+            fold_res_T_val_cont = torch.cat([p[2] for p in predictions], dim=0) if predictions[0][2] is not None else None
+            logger.info(f"add fold{fold_idx} residuals to full dataset")
+            data_pipeline.add_train_residual_data(fold_idx, fold_res_Y_val, fold_res_T_val_disc, fold_res_T_val_cont)
             if args.exp.plot_residual:
-                plot_residual_distribution(mlf_logger_fold, fold_res_Y_val, fold_res_T_val, args)
-            all_res_Y[val_idx] = fold_res_Y_val
-            all_res_T[val_idx] = fold_res_T_val
+                plot_residual_distribution(mlf_logger_fold, fold_res_Y_val, fold_res_T_val_cont, args)
+            
+            #evalute residual on the external validation set (not the internal val set from the folds)
+            logger.info(f"fold{fold_idx}: Evaluate nuisance network on external validation set")
+            external_val_loader = DataLoader(
+                data_pipeline.val_data, batch_size=args.exp.batch_size, shuffle=False, num_workers=args.exp.num_workers, drop_last=False
+            )
+            predictions = trainer.predict(nuisance_rnn, external_val_loader)
+            external_val_res_Y.append(torch.cat([p[0] for p in predictions], dim=0))
+            external_val_res_T_disc.append(torch.cat([p[1] for p in predictions], dim=0) if predictions[0][1] is not None else None)
+            external_val_res_T_cont.append(torch.cat([p[2] for p in predictions], dim=0) if predictions[0][2] is not None else None)
+
+        #compute the mean of the k runs on the external val set
+        logger.info("Compute mean residuals on external validation set and add to data pipeline")
+        external_mean_res_Y = torch.stack(external_val_res_Y, dim=0).mean(dim=0)
+        external_mean_res_T_disc = torch.stack(external_val_res_T_disc, dim=0).mean(dim=0) if external_val_res_T_disc[0] is not None else None
+        external_mean_res_T_cont = torch.stack(external_val_res_T_cont, dim=0).mean(dim=0) if external_val_res_T_cont[0] is not None else None
+        data_pipeline.add_full_residual_data('val', external_mean_res_Y, external_mean_res_T_disc, external_mean_res_T_cont)
         
-        all_res_Y = torch.from_numpy(all_res_Y)
-        all_res_T = torch.from_numpy(all_res_T)
         logger.info("All folds completed. Begin second-stage Dynamic Effect Estimator training.")
 
     else:
+        #Need to change the code in the future
         logger.info("DEBUG: Use residual computed from regression DML")
         assert args.dataset.sequence_length == args.dataset.n_periods
         resY_full = pickle.load(open(os.path.join(args.exp.residual_dir, 'resY_full.pkl'), 'rb'))
         resT_full = pickle.load(open(os.path.join(args.exp.residual_dir, 'resT_full.pkl'), 'rb'))
         all_res_Y, all_res_T = transform_residual_data(resY_full, resT_full, args.dataset.n_periods)
 
-    full_dataset.add_residual_data(all_res_Y, all_res_T)
-    train_loader, val_loader, train_indices, val_indices = create_loaders_with_indices(
-        full_dataset, args.dataset.train_val_split, args.exp.batch_size, 2, args.exp.seed
-    )
+    #refresh the train_loader and val_loader
+    train_loader = DataLoader(data_pipeline.train_data, batch_size=args.exp.batch_size, shuffle=False, num_workers=args.exp.num_workers, drop_last=False)
+    val_loader = DataLoader(data_pipeline.val_data, batch_size=args.exp.batch_size, shuffle=False, num_workers=args.exp.num_workers, drop_last=False)
 
-    #Second phase of the model
-    logger.info("residuals fed to Dynamic Effect estimator network")
+    #Second phase of the model training
     if args.exp.logging:
         experiment_name = args.exp.exp_name
-        mlf_logger_de = FilteringMlFlowLogger(
-            filter_submodels=[], 
-            experiment_name=experiment_name, 
-            tracking_uri=args.exp.mlflow_uri, 
-            run_name=f'deeter_seed{args.dataset.seed}'
-        )
+        mlf_logger_de = FilteringMlFlowLogger(filter_submodels=[],  experiment_name=experiment_name, tracking_uri=args.exp.mlflow_uri, run_name=f'de_est_seed{args.dataset.seed}')
         artifacts_path_de = hydra.utils.to_absolute_path(
             mlf_logger_de.experiment.get_run(mlf_logger_de.run_id).info.artifact_uri
         ).replace('mlflow-artifacts:', 'mlruns')
@@ -159,18 +145,12 @@ def main(args: DictConfig):
         mlf_logger_de = None
         artifacts_path_de = None
     if args.checkpoint.save:
-        checkpoint_callback = ModelCheckpoint(
-            dirpath = artifacts_path_de,
-            filename = "de-{epoch}-{val_loss:.4f}",
-            monitor = args.checkpoint.monitor_de,
-            mode = "min",
-            save_top_k = args.checkpoint.top_k,
-            verbose = True
-        )
+        checkpoint_callback = ModelCheckpoint(dirpath = artifacts_path_de, filename = "de-{epoch}-{val_loss:.4f}", monitor = args.checkpoint.monitor_de,
+            mode = "min", save_top_k = args.checkpoint.top_k, verbose = True)
     de_callbacks = []
     de_callbacks.append(checkpoint_callback)
     de_callbacks += [LearningRateMonitor(logging_interval='epoch')]
-    de_est = DynamicEffect_estimator(args, hddataset.true_effect)
+    de_est = DynamicEffect_estimator(args, data_pipeline.true_effect)
     trainer_de = Trainer(
         max_epochs=args.exp.max_epochs_de,
         callbacks=de_callbacks,
@@ -191,21 +171,26 @@ def main(args: DictConfig):
     #                                                      args=args, 
     #                                                      true_effect=hddataset.true_effect)
 
-
-    predictions_de = trainer_de.predict(de_est, val_loader)
+    test_loader = DataLoader(data_pipeline.test_data, batch_size=args.exp.batch_size, shuffle=False, num_workers=args.exp.num_workers, drop_last=False)
+    predictions_de = trainer_de.predict(de_est, test_loader)
     predicted_de = torch.cat([pred for pred in predictions_de], dim = 0)
 
-    if (len(args.dataset.hetero_inds) == 0) or (args.dataset.hetero_inds == None):
-        plot_de_est_distribution(mlf_logger_de, predicted_de, hddataset.true_effect, args)
+    #When individual true dynamic effect is available, log the mse / plot distribution
+    if data_pipeline.gt_dynamic_effect_available:
+        individual_true_effect = data_pipeline.compute_individual_true_dynamic_effects()
+        if (len(args.dataset.hetero_inds) == 0) or (args.dataset.hetero_inds == None):
+            plot_de_est_distribution(mlf_logger_de, predicted_de, individual_true_effect, args)
     
     logger.info("Evaluate individual treatment effect")
-    T_intv = np.ones((args.dataset.n_periods, args.dataset.n_treatments))
-    T_base = np.zeros((args.dataset.n_periods, args.dataset.n_treatments))
-    logger.info(f"Interved treatment: \n {T_intv}")
-    logger.info(f"Baseline treatment: \n {T_base}")
+    T_intv_disc, T_base_disc = np.ones((args.dataset.n_periods, args.dataset.n_treatments_disc)), np.zeros((args.dataset.n_periods, args.dataset.n_treatments_disc)) \
+                                    if args.dataset.n_treatments_disc > 0 else None, None
+    T_intv_cont, T_base_cont = np.ones((args.dataset.n_periods, args.dataset.n_treatments_cont)), np.zeros((args.dataset.n_periods, args.dataset.n_treatments_cont)) \
+                                    if args.dataset.n_treatments_cont > 0 else None, None
+    logger.info(f"Interved treatment (discrete and continuous): \n {T_intv_disc} \n {T_intv_cont}")
+    logger.info(f"Baseline treatment (discrete and continuous): \n {T_base_disc} \n {T_base_cont}")
 
-    predicted_te = de_est.predict_treatment_effect(predicted_de, T_intv, T_base)
-    gt_te = hddataset.compute_treatment_effect(T_intv, T_base)[val_indices, :]
+    predicted_te = de_est.predict_treatment_effect(predicted_de, T_intv_disc, T_intv_cont, T_base_disc, T_base_cont)
+    gt_te = data_pipeline.compute_treatment_effect('test', T_intv_disc, T_intv_cont, T_base_disc, T_base_cont)
     mse = ((gt_te - predicted_te) ** 2).mean()
     mlf_logger_de.log_metrics({"TE_mean":mse})
     

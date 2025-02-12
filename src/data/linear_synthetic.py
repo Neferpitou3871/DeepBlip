@@ -3,66 +3,36 @@ from econml.utilities import cross_product
 from statsmodels.tools.tools import add_constant
 import torch
 from torch.utils.data import Dataset, random_split
+
+from src.data.base_dataset_pipeline import BaseDatasetPipeline, ProcessedDataset
 import logging
 logger = logging.getLogger(__name__)
 
-class ProcessedDataset(Dataset):
-    def __init__(self, Y, T, X, prev_Y, prev_T):
-        self.Y = Y
-        self.T = T
-        self.X = X
-        self.prev_Y = prev_Y
-        self.prev_T = prev_T
-        self.res_Y = None
-        self.res_T = None
 
-    def add_residual_data(self, res_Y, res_T):
-        assert self.Y.shape[0] == res_Y.shape[0]
-        assert self.Y.shape[0] == res_T.shape[0]
-        self.res_Y = res_Y
-        self.res_T = res_T
-
-    def __len__(self):
-        return self.Y.shape[0]
-
-    def __getitem__(self, idx):
-        return {
-            "curr_treatments": self.T[idx],      # (S, n_treatments)
-            "prev_treatments": self.prev_T[idx], # (S, n_treatments)
-            "curr_outputs": self.Y[idx],         # (S,)
-            "prev_outputs": self.prev_Y[idx],    # (S,)
-            "curr_covariates": self.X[idx],       # (S, n_x)
-            "residual_Y": self.res_Y[idx] if self.res_Y is not None else torch.zeros(0),
-            "residual_T": self.res_T[idx] if self.res_T is not None else torch.zeros(0)
-        }
-
-class MarkovianHeteroDynamicDataset():
+class linearMarkovianDataPipeline(BaseDatasetPipeline):
     """
     Uses code from Dynamic DML (DynamicPancelDGP class) 
     https://proceedings.neurips.cc/paper/2021/hash/bf65417dcecc7f2b0006e1f5793b7143-Abstract.html
     """
 
-    def __init__(self, params):
-        np.random.seed(params['seed'])
-        self.n_treatments = params['n_treatments']
-        self.n_units = params['n_units']
-        self.n_periods = params['n_periods']
-        self.sequence_length = params['sequence_length']
-        self.sigma_x = params['sigma_x']
-        self.sigma_y = params['sigma_y']
-        self.n_x = params['n_x']
-        self.state_effect = params['state_effect']
-        self.autoreg = params['autoreg']
-        self.hetero_strength = params['hetero_strength']
-        self.conf_str = params['conf_str']
-        self.s_x = params['s_x']
-        self.train_val_split = params['train_val_split']
-        self.params = params
+    def __init__(self, argsdataset):
+        super().__init__(argsdataset)
 
-        self.hetero_inds = np.array(params.hetero_inds, dtype=np.int32) if (
-                                        (params.hetero_inds is not None) and (len(params.hetero_inds) > 0)) else None
+        self.sigma_x = argsdataset['sigma_x']
+        self.sigma_y = argsdataset['sigma_y']
+        self.n_x = argsdataset['n_x']
+        self.state_effect = argsdataset['state_effect']
+        self.autoreg = argsdataset['autoreg']
+        self.hetero_strength = argsdataset['hetero_strength']
+        self.conf_str = argsdataset['conf_str']
+        self.s_x = argsdataset['s_x']
+        self.gt_dynamic_effect_available = True
+
+        self.hetero_inds = np.array(argsdataset.hetero_inds, dtype=np.int32) if (
+                                        (argsdataset.hetero_inds is not None) and (len(argsdataset.hetero_inds) > 0)) else None
         self.endo_inds = np.setdiff1d(np.arange(self.n_x), self.hetero_inds).astype(int)
 
+        np.random.seed(argsdataset['seed'])
         self.Alpha = np.random.uniform(-1, 1, size = (self.n_x, self.n_treatments))
         self.Alpha *= self.state_effect
         if self.hetero_inds is not None:
@@ -96,14 +66,28 @@ class MarkovianHeteroDynamicDataset():
         for t in np.arange(1, self.n_periods):
             self.true_hetero_effect[t, :] = cross_product(add_constant(self.x_hetero_effect.reshape(1, -1), has_constant='add'), 
                                                             self.zeta.reshape(1, -1) @ np.linalg.matrix_power(self.Beta, t - 1) @ self.Alpha)
-        
+        logger.info("data parameter generation finished")
+        #maintain the data and the index
+        self.Y_obs = {'train': None, 'val': None, 'test': None}
+        self.T_obs = {'train': None, 'val': None, 'test': None}
+        self.X_obs = {'train': None, 'val': None, 'test': None}
+
         #store the random noises
         self.noisex = np.zeros((self.n_units, self.sequence_length, self.n_x))
         self.noisey = np.zeros((self.n_units, self.sequence_length))
-        return
+        
+        self._split_data(*self._generate_full_factual_data())
 
-    def generate_observational_data(self, policy = None, seed = 2024):
+        self.train_data = self._get_torch_dataset('train')
+        self.val_data = self._get_torch_dataset('val')
+        self.test_data = self._get_torch_dataset('test')
 
+
+    def _generate_full_factual_data(self, policy = None):
+        """
+        Generate the full factual data for the dataset
+        """
+        logger.info(f'Generating observational linear markovian heterodynamic dataset')
         s_t = self.params["s_t"]
         sigma_t = self.params['sigma_t']
         gamma = self.params['gamma']
@@ -115,7 +99,7 @@ class MarkovianHeteroDynamicDataset():
             def policy(Tprev, X, period):
                 return gamma * Tprev + (1 - gamma) * self.Delta @ X + np.random.normal(0, sigma_t, size = self.n_treatments)
         
-        np.random.seed(seed)
+        np.random.seed(self.seed)
         Y = np.zeros((self.n_units, self.sequence_length))
         T = np.zeros((self.n_units, self.sequence_length, self.n_treatments))
         X = np.zeros((self.n_units, self.sequence_length, self.n_x))
@@ -134,12 +118,29 @@ class MarkovianHeteroDynamicDataset():
                 #Generate outcome
                 Y[i][t] = (np.dot(self.y_hetero_effect, X[i][t]) + 1) * np.dot(self.epsilon, T[i][t]) + \
                             np.dot(X[i][t], self.zeta) + self.noisey[i, t]
-        self.Y_obs = np.array(Y)
-        self.T_obs = np.array(T)
-        self.X_obs = np.array(X)
         return Y, T, X
     
-    def compute_individual_dynamic_effects(self, X):
+    def _split_data(self, Y, T, X):
+        """
+        Split the generated factual data into train/val/test subsets, given the ratio of self.val_split and self.test_split
+        """
+        #Generate indices for train, val and test
+        index = np.random.shuffle(np.range(self.n_units))
+        train_pos = int(self.n_units * (1 - self.val_split - self.test_split))
+        val_pos = int(self.n_units * (1 - self.test_split))
+        train_index, val_index, test_index = index[:train_pos], index[train_pos:val_pos], index[val_pos:]
+        
+        self.Y_obs['train'], self.Y_obs['val'], self.Y_obs['test'] = Y[train_index], Y[val_index], Y[test_index]
+        self.T_obs['train'], self.T_obs['val'], self.T_obs['test'] = T[train_index], T[val_index], T[test_index]
+        self.X_obs['train'], self.X_obs['val'], self.X_obs['test'] = X[train_index], X[val_index], X[test_index]
+        self.factual_generated = True
+        
+        self.train_index, self.val_index, self.test_index = train_index, val_index, test_index
+        self.index = {'train': train_index, 'val': val_index, 'test': test_index}
+        return
+    
+    
+    def compute_individual_true_dynamic_effects(self, X):
         """For linear markovian hetero datasets, we could compute the individual dynamic effects directly from self.true_hetero_effect
         Args:
             X: Covariate, np.ndarray of shape (N, SL, n_x) (the generated covariate)
@@ -157,49 +158,36 @@ class MarkovianHeteroDynamicDataset():
         return individual_de
 
 
-    def compute_treatment_effect(self, intervention_T, baseline_T):
-        """
-        Args:
-            intervention_T: np.ndarray of shape (n_periods,)
-            baseline_T: np.ndarray of shape (n_periods,)
-            
-        Returns:
-            np.ndarray: Treatment effect matrix of shape (n_units, sequence_length - n_periods + 1)
-        """
-        assert intervention_T.shape == (self.n_periods, self.n_treatments)
-        assert baseline_T.shape == (self.n_periods, self.n_treatments)
-        
-        # Simulate counterfactuals
-        Y_intervention = self._simulate_counterfactual(intervention_T)
-        Y_baseline = self._simulate_counterfactual(baseline_T)
-        
-        # Calculate treatment effects starting from t=n_periods-1
-        return Y_intervention - Y_baseline
-
-
-    def _simulate_counterfactual(self, T_seq):
+    def _simulate_counterfactuals(self, subset, T_seq):
         """Simulates outcomes for arbitrary treatment sequence using stored noise"""
+        logger.info(f"Simulating rolling counterfactual outcomes on linear markovian hetero dataset for {subset}")
         assert T_seq.shape == (self.n_periods, self.n_treatments)
         m = self.n_periods
         #buffer for storing intervened values in time window of length m
-        X_ctf_local = np.zeros((self.n_units, m, self.n_x))
-        Y_ctf_local = np.zeros((self.n_units, m))
+        n_units = len(self.index[subset])
+        X_ctf_local = np.zeros((n_units, m, self.n_x))
+        Y_ctf_local = np.zeros((n_units, m))
         #expand T_seq
-        T_intv = T_seq.reshape(1, self.n_periods, self.n_treatments).repeat(self.n_units, axis = 0)
+        T_intv = T_seq.reshape(1, self.n_periods, self.n_treatments).repeat(n_units, axis = 0)
         #initialize result
-        Y_ctf = np.zeros((self.n_units, self.sequence_length - m + 1))
+        Y_ctf = np.zeros((n_units, self.sequence_length - m + 1))
+
+        #fetch the background noise variables and factual covariate
+        noisex = self.noisex[self.index[subset]]
+        noisey = self.noisey[self.index[subset]]
+        X_obs = self.X_obs[subset]
         for t in range(self.sequence_length - self.n_periods + 1):
             #Compute the counterfactual X_ctf and Y_ctf
             for l in range(self.n_periods):
                 if l == 0:
-                    X_ctf_local[:, 0, :] = self.X_obs[:, t, :]
+                    X_ctf_local[:, 0, :] = X_obs[:, t, :]
                 else:
                     hetero_multiplier_x = 1 + (X_ctf_local[:, l - 1, :] * self.x_hetero_effect).sum(axis=1)
                     X_ctf_local[:, l, :] = np.expand_dims(hetero_multiplier_x, axis = 1) * np.dot(T_intv[:, l - 1, :], self.Alpha.T) + \
-                                        np.dot(X_ctf_local[:, l - 1, :], self.Beta.T) + self.noisex[:, t + l, :]
+                                        np.dot(X_ctf_local[:, l - 1, :], self.Beta.T) + noisex[:, t + l, :]
                 hetero_multiplier_y = 1 + (X_ctf_local[:, l, :] * self.y_hetero_effect).sum(axis = 1)
                 Y_ctf_local[:, l] = hetero_multiplier_y * np.dot(T_intv[:, l, :], self.epsilon) + \
-                                    np.dot(X_ctf_local[:, l, :], self.zeta) + self.noisey[:, t + l]
+                                    np.dot(X_ctf_local[:, l, :], self.zeta) + noisey[:, t + l]
             Y_ctf[:, t] = Y_ctf_local[:, -1]
         return Y_ctf
 
@@ -232,25 +220,14 @@ class MarkovianHeteroDynamicDataset():
 
         return train_dataset, val_dataset
     
-    def get_full_dataset(self, Y, T, X):
-        logger.info(f'Processing markovian heterodynamic dataset, full dataset, no split')
-        if not isinstance(Y, torch.Tensor):
-            Y = torch.from_numpy(Y).double()
-        if not isinstance(T, torch.Tensor):
-            T = torch.from_numpy(T).double()
-        if not isinstance(X, torch.Tensor):
-            X = torch.from_numpy(X).double()
-
-        prev_T = torch.zeros_like(T)
-        prev_T[:, 1:, :] = T[:, :-1, :]
-
-        prev_Y = torch.zeros_like(Y)
-        prev_Y[:, 1:] = Y[:, :-1]
+    def _get_torch_dataset(self, subset='train'):
+        logger.info(f'Creating torch dataset for {subset} of linear markovian heterodynamic dataset')
         
-        dataset = ProcessedDataset(Y, T, X, prev_Y, prev_T)
+        return ProcessedDataset(self.Y_obs[subset], 
+                                T_disc = None, T_cont = self.T_obs[subset], 
+                                X_static=None, X_dynamic=self.X_obs[subset],
+                                active_entries=None, subset_name = subset)
 
-        return dataset
-        
 
 
         

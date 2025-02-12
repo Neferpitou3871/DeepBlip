@@ -1,8 +1,11 @@
+__target__: src.data.linear_synthetic.linearMarkovianDataPipeline
 n_units: 2000
 n_periods: 3
 sequence_length: 10
 n_x: 50
 n_treatments: 1
+n_treatments_disc: 0
+n_treatments_cont: 1
 s_x: 40
 s_t: 1
 sigma_x: 0.5
@@ -15,6 +18,8 @@ hetero_strength: 0.5
 hetero_inds: [40, 41, 42, 43, 44, 45, 46, 47, 48, 49]
 conf_str: 5
 seed: 2024
-train_val_split: 0.8
+split:
+  val: 0.2
+  test: 0.2
 
 
