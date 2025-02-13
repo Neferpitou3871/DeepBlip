@@ -268,9 +268,12 @@ class Nuisance_Network(LightningModule):
         res_Y shape: (b, SL - n_period + 1, n_period)
         res_T shape: (b, SL - n_period + 1, n_period, n_period, n_treatments)
         """
-        curr_treatments = batch['curr_treatments']
-        curr_covariates = batch['curr_covariates']
         curr_outputs = batch['curr_outputs']
+        b, L = curr_outputs.size(0), curr_outputs.size(1)
+        curr_treatments_disc = batch['curr_treatments_disc'] if self.n_treatments_disc > 0 else torch.zeros((b, L, 0), device=self.device)
+        curr_treatments_cont = batch['curr_treatments_cont'] if self.n_treatments_cont > 0 else torch.zeros((b, L, 0), device=self.device)
+        curr_treatments = torch.cat([curr_treatments_disc, curr_treatments_cont], dim = -1)
+        curr_covariates = batch['curr_covariates']
 
         p_pred_all_steps, q_pred_all_steps = self.forward(batch)
         Q_gt_all_steps = self.compute_Q(curr_covariates, curr_treatments)

@@ -1,5 +1,6 @@
 import numpy as np
 from econml.utilities import cross_product
+from tqdm import tqdm
 from statsmodels.tools.tools import add_constant
 import torch
 from torch.utils.data import Dataset, random_split
@@ -15,24 +16,66 @@ class linearMarkovianDataPipeline(BaseDatasetPipeline):
     https://proceedings.neurips.cc/paper/2021/hash/bf65417dcecc7f2b0006e1f5793b7143-Abstract.html
     """
 
-    def __init__(self, argsdataset):
-        super().__init__(argsdataset)
+    def __init__(self, 
+                 seed: int,
+                 n_treatments: int,
+                 n_treatments_disc: int,
+                 n_treatments_cont: int,
+                 s_t: int,
+                 n_units: int,
+                 n_periods: int,
+                 sequence_length: int,
+                 split: dict,
+                 hetero_inds: list,
+                 sigma_x: float, sigma_y: float, 
+                 sigma_t: float, 
+                 gamma: float,
+                 n_x: int, 
+                 s_x: int,
+                 state_effect: float, 
+                 autoreg: float, 
+                 hetero_strength: float, 
+                 conf_str: float,
+                 **kwargs):
+        """
+        Initialize the dataset pipeline for linear markovian heterodynamic dataset
+        Args:
+            hetero_inds: list of indices of heterogenous covariates
+            s_x: number of endogenous covariates variables
+            s_t: number of effective treatment variables
+            state_effect: state effect
+            autoreg: autoregression coefficient
+            conf_str: the strength of the confounding effect
+        """
+        super().__init__(
+            seed = seed, 
+            n_treatments=n_treatments,
+            n_treatments_disc=n_treatments_disc,
+            n_treatments_cont=n_treatments_cont,
+            n_units=n_units,
+            n_periods=n_periods,
+            sequence_length=sequence_length,
+            split=split,
+        )
 
-        self.sigma_x = argsdataset['sigma_x']
-        self.sigma_y = argsdataset['sigma_y']
-        self.n_x = argsdataset['n_x']
-        self.state_effect = argsdataset['state_effect']
-        self.autoreg = argsdataset['autoreg']
-        self.hetero_strength = argsdataset['hetero_strength']
-        self.conf_str = argsdataset['conf_str']
-        self.s_x = argsdataset['s_x']
+        self.sigma_x = sigma_x
+        self.sigma_y = sigma_y
+        self.n_x = n_x
+        self.s_x = s_x
+        self.s_t = s_t
+        self.sigma_t = sigma_t
+        self.gamma = gamma
+        self.state_effect = state_effect
+        self.autoreg = autoreg
+        self.hetero_strength = hetero_strength
+        self.conf_str = conf_str
         self.gt_dynamic_effect_available = True
 
-        self.hetero_inds = np.array(argsdataset.hetero_inds, dtype=np.int32) if (
-                                        (argsdataset.hetero_inds is not None) and (len(argsdataset.hetero_inds) > 0)) else None
+        self.hetero_inds = np.array(hetero_inds, dtype=np.int32) if (
+                                        (hetero_inds is not None) and (len(hetero_inds) > 0)) else None
         self.endo_inds = np.setdiff1d(np.arange(self.n_x), self.hetero_inds).astype(int)
 
-        np.random.seed(argsdataset['seed'])
+        np.random.seed(seed)
         self.Alpha = np.random.uniform(-1, 1, size = (self.n_x, self.n_treatments))
         self.Alpha *= self.state_effect
         if self.hetero_inds is not None:
@@ -88,9 +131,9 @@ class linearMarkovianDataPipeline(BaseDatasetPipeline):
         Generate the full factual data for the dataset
         """
         logger.info(f'Generating observational linear markovian heterodynamic dataset')
-        s_t = self.params["s_t"]
-        sigma_t = self.params['sigma_t']
-        gamma = self.params['gamma']
+        s_t = self.s_t
+        sigma_t = self.sigma_t
+        gamma = self.gamma
 
         self.Delta = np.zeros((self.n_treatments, self.n_x))
         self.Delta[:, :s_t] = self.conf_str / s_t
@@ -103,7 +146,7 @@ class linearMarkovianDataPipeline(BaseDatasetPipeline):
         Y = np.zeros((self.n_units, self.sequence_length))
         T = np.zeros((self.n_units, self.sequence_length, self.n_treatments))
         X = np.zeros((self.n_units, self.sequence_length, self.n_x))
-        for i in range(self.n_units):
+        for i in tqdm(range(self.n_units), desc = 'Generating data'):
             for t in range(self.sequence_length):
                 #Generate random exogeneous noise for X, y
                 self.noisex[i, t] = np.random.normal(0, self.sigma_x, size = self.n_x)
@@ -125,7 +168,7 @@ class linearMarkovianDataPipeline(BaseDatasetPipeline):
         Split the generated factual data into train/val/test subsets, given the ratio of self.val_split and self.test_split
         """
         #Generate indices for train, val and test
-        index = np.random.shuffle(np.range(self.n_units))
+        index = np.random.shuffle(np.arange(self.n_units))
         train_pos = int(self.n_units * (1 - self.val_split - self.test_split))
         val_pos = int(self.n_units * (1 - self.test_split))
         train_index, val_index, test_index = index[:train_pos], index[train_pos:val_pos], index[val_pos:]
@@ -207,7 +250,7 @@ class linearMarkovianDataPipeline(BaseDatasetPipeline):
         prev_Y = torch.zeros_like(Y)
         prev_Y[:, 1:] = Y[:, :-1]
 
-        torch.manual_seed(self.params['seed'])
+        torch.manual_seed(self.seed)
         indices = torch.randperm(Y.shape[0])
         train_size = int(Y.shape[0] * self.train_val_split)
         train_indices = indices[:train_size]

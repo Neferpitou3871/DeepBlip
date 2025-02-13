@@ -10,9 +10,7 @@ from pytorch_lightning import Trainer
 from pytorch_lightning.utilities.seed import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from src.utils import FilteringMlFlowLogger
-from src.data.linear_synthetic import MarkovianHeteroDynamicDataset
 from src.models.dml_rnn import Nuisance_Network, DynamicEffect_estimator
-from src.models.dml import HeteroDynamicPanelDML
 from src.models.utils import evaluate_nuisance_mse, plot_residual_distribution, plot_de_est_distribution, transform_residual_data
 from src.utils import log_params_from_omegaconf_dict, create_loaders_with_indices
 import pickle

@@ -86,23 +86,38 @@ class ProcessedDataset(Dataset):
 
 
 class BaseDatasetPipeline:
-    def __init__(self, argsdataset):
+    def __init__(self, 
+                 seed: int,
+                 n_treatments: int,
+                 n_treatments_disc: int,
+                 n_treatments_cont: int,
+                 n_units: int,
+                 n_periods: int,
+                 sequence_length: int,
+                 split: dict,
+                 **kwargs):
         """
         Initialize basic configurations and set parameters.
         Args:
-            config (dict): Configuration dict/object containing global parameters
-                           e.g. seed, train/val/test split ratios, etc.
+           seed (int): Random seed for reproducibility.
+            n_treatments (int): Total number of treatments.
+            n_treatments_disc (int): Number of discrete treatments.
+            n_treatments_cont (int): Number of continuous treatments.
+            n_units (int): Number of units.
+            n_periods (int): Number of periods for intervention.
+            sequence_length (int): Length of the sequence.
+            split (dict): Dictionary with keys 'val' and 'test'.
         """
-        self.param = argsdataset
-        self.seed = argsdataset.get('seed', 42)
-        self.n_treatments = argsdataset['n_treatments']
-        self.n_treatments_disc = argsdataset.get('n_treatments_disc', 0)
-        self.n_treatments_cont = argsdataset.get('n_treatments_cont', 0)
+        #self.param = argsdataset
+        self.seed = seed
+        self.n_treatments = n_treatments
+        self.n_treatments_disc = n_treatments_disc
+        self.n_treatments_cont = n_treatments_cont
         assert self.n_treatments == self.n_treatments_disc + self.n_treatments_cont, "Mismatch in treatment count."
-        self.n_units = argsdataset['n_units']
-        self.n_periods = argsdataset['n_periods']
-        self.sequence_length = argsdataset['sequence_length']
-        self.val_split, self.test_split = argsdataset['split']['val'], argsdataset['split']['test']
+        self.n_units = n_units
+        self.n_periods = n_periods
+        self.sequence_length = sequence_length
+        self.val_split, self.test_split = split['val'], split['test']
         self.kfold_split = None
         self.fold_num = 0
         self.loaded = False #whether the data has been loaded

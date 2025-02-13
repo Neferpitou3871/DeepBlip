@@ -26,7 +26,7 @@ exp:
   max_epochs_de: 1
   fit_dml: False
   plot_residual: True
-  load_pretrained: True                     #load pretrained model for nuiisance network
+  load_pretrained: False                     #load pretrained model for nuiisance network
   exp_id: "107733509644077161"
   nuisance_run_ids:
     - "665ce54966ae4c91827b1a6f876e27f2"
