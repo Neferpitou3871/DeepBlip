@@ -21,9 +21,9 @@ model:
     lr_scheduler: False
 
 exp:
-  kfold: 3
+  kfold: 2
   max_epochs_nuisance: 15                   # Number of epochs
-  max_epochs_de: 1
+  max_epochs_de: 15
   fit_dml: False
   plot_residual: True
   load_pretrained: False                     #load pretrained model for nuiisance network

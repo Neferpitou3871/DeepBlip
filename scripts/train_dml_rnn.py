@@ -29,9 +29,10 @@ def main(args: DictConfig):
     #instantiate dataset pipeline
     data_pipeline = instantiate(args.dataset, _recursive_=True)
     external_val_res_Y, external_val_res_T_disc, external_val_res_T_cont = list(), list(), list()
+    disc_dim, cont_dim = args.dataset.n_treatments_disc, args.dataset.n_treatments_cont
     if args.exp.use_regression_residual == False:
         #k-fold cross-validation for nuisance network (Only on training set)
-        for fold_idx, (train_data, val_data) in enumerate(data_pipeline.kfold_split(args.exp.kfold)):
+        for fold_idx, (train_data, val_data) in enumerate(data_pipeline.split_kfold_cv(args.exp.kfold)):
             logger.info(f"Nuisance training: Starting fold {fold_idx} out of {args.exp.kfold} folds ...")
 
             if args.exp.logging:
@@ -93,10 +94,10 @@ def main(args: DictConfig):
             logger.info(f"fold{fold_idx}: Begin residual inference using trained nuisance network")
             predictions = trainer.predict(nuisance_rnn, val_loader)
             fold_res_Y_val = torch.cat([p[0] for p in predictions], dim=0)
-            fold_res_T_val_disc = torch.cat([p[1] for p in predictions], dim=0) if predictions[0][1] is not None else None
-            fold_res_T_val_cont = torch.cat([p[2] for p in predictions], dim=0) if predictions[0][2] is not None else None
+            fold_res_T_val_disc = torch.cat([p[1][:, :, :, :, :disc_dim] for p in predictions], dim=0) if disc_dim > 0 else None
+            fold_res_T_val_cont = torch.cat([p[1][:, :, :, :, disc_dim:] for p in predictions], dim=0) if cont_dim > 0 else None
             logger.info(f"add fold{fold_idx} residuals to full dataset")
-            data_pipeline.add_train_residual_data(fold_idx, fold_res_Y_val, fold_res_T_val_disc, fold_res_T_val_cont)
+            data_pipeline.add_fold_residual_data(fold_idx, fold_res_Y_val, fold_res_T_val_disc, fold_res_T_val_cont)
             if args.exp.plot_residual:
                 plot_residual_distribution(mlf_logger_fold, fold_res_Y_val, fold_res_T_val_cont, args)
             
@@ -107,8 +108,8 @@ def main(args: DictConfig):
             )
             predictions = trainer.predict(nuisance_rnn, external_val_loader)
             external_val_res_Y.append(torch.cat([p[0] for p in predictions], dim=0))
-            external_val_res_T_disc.append(torch.cat([p[1] for p in predictions], dim=0) if predictions[0][1] is not None else None)
-            external_val_res_T_cont.append(torch.cat([p[2] for p in predictions], dim=0) if predictions[0][2] is not None else None)
+            external_val_res_T_disc.append(torch.cat([p[1][:, :, :, :, :disc_dim] for p in predictions], dim=0) if disc_dim > 0 else None)
+            external_val_res_T_cont.append(torch.cat([p[1][:, :, :, :, disc_dim:] for p in predictions], dim=0) if cont_dim > 0 else None)
 
         #compute the mean of the k runs on the external val set
         logger.info("Compute mean residuals on external validation set and add to data pipeline")
@@ -175,15 +176,15 @@ def main(args: DictConfig):
 
     #When individual true dynamic effect is available, log the mse / plot distribution
     if data_pipeline.gt_dynamic_effect_available:
-        individual_true_effect = data_pipeline.compute_individual_true_dynamic_effects()
+        individual_true_effect = data_pipeline.compute_individual_true_dynamic_effects(X = data_pipeline.test_data.X_dynamic)
         if (len(args.dataset.hetero_inds) == 0) or (args.dataset.hetero_inds == None):
             plot_de_est_distribution(mlf_logger_de, predicted_de, individual_true_effect, args)
     
     logger.info("Evaluate individual treatment effect")
-    T_intv_disc, T_base_disc = np.ones((args.dataset.n_periods, args.dataset.n_treatments_disc)), np.zeros((args.dataset.n_periods, args.dataset.n_treatments_disc)) \
-                                    if args.dataset.n_treatments_disc > 0 else None, None
-    T_intv_cont, T_base_cont = np.ones((args.dataset.n_periods, args.dataset.n_treatments_cont)), np.zeros((args.dataset.n_periods, args.dataset.n_treatments_cont)) \
-                                    if args.dataset.n_treatments_cont > 0 else None, None
+    T_intv_disc, T_base_disc = (np.ones((args.dataset.n_periods, disc_dim)), np.zeros((args.dataset.n_periods, disc_dim))) \
+                                    if disc_dim > 0 else (None, None)
+    T_intv_cont, T_base_cont = (np.ones((args.dataset.n_periods, cont_dim)), np.zeros((args.dataset.n_periods, cont_dim))) \
+                                    if cont_dim > 0 else (None, None)
     logger.info(f"Interved treatment (discrete and continuous): \n {T_intv_disc} \n {T_intv_cont}")
     logger.info(f"Baseline treatment (discrete and continuous): \n {T_base_disc} \n {T_base_cont}")
 

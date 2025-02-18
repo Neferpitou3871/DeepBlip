@@ -52,8 +52,8 @@ class ProcessedDataset(Dataset):
             'static_features': self.X_static[idx] if self.X_static is not None else torch.zeros(0), # (S, n_static)
             "curr_covariates": self.X_dynamic[idx],       # (S, n_x)
             "residual_Y": self.res_Y[idx] if self.res_Y is not None else torch.zeros(0),
-            "residual_T_disc": self.res_T[idx] if self.res_T is not None else torch.zeros(0),
-            "residual_T_cont": self.res_T[idx] if self.res_T is not None else torch.zeros(0)
+            "residual_T_disc": self.res_T_disc[idx] if self.res_T_disc is not None else torch.zeros(0),
+            "residual_T_cont": self.res_T_cont[idx] if self.res_T_cont is not None else torch.zeros(0)
         }
     
     def add_residual_data(self, subset_index, res_Y, res_T_disc = None, res_T_cont = None):
@@ -70,17 +70,19 @@ class ProcessedDataset(Dataset):
         if res_T_cont is None and (res_T_cont is not None):
             raise ValueError("Treatments residuals mis-match")
 
+        n_periods = res_Y.shape[-1]
+        t_len = res_Y.shape[1]
         if self.res_Y is None:
-            self.res_Y = torch.zeros_like(self.Y)
+            self.res_Y = torch.zeros((len(self), t_len, n_periods))
         self.res_Y[subset_index] = res_Y
 
         if res_T_disc is not None:
             if self.res_T_disc is None:
-                self.res_T_disc = torch.zeros_like(self.T_disc)
+                self.res_T_disc = torch.zeros(len(self), t_len, n_periods, n_periods, res_T_disc.shape[-1])
             self.res_T_disc[subset_index] = res_T_disc
         if res_T_cont is not None:
             if self.res_T_cont is None:
-                self.res_T_cont = torch.zeros_like(self.T_cont)
+                self.res_T_cont = torch.zeros(len(self), t_len, n_periods, n_periods, res_T_cont.shape[-1])
             self.res_T_cont[subset_index] = res_T_cont
         return
 
@@ -220,7 +222,7 @@ class BaseDatasetPipeline:
         """
         raise NotImplementedError("Subclasses should implement this method.")
 
-    def k_fold_split(self, k=3):
+    def split_kfold_cv(self, k=3):
         """
         Perform a k-fold cross-validation split on the training data.
         Yields indices for local train and validation subsets on each split.
@@ -239,7 +241,7 @@ class BaseDatasetPipeline:
         self.fold_num = k
         
         indices = np.arange(total_samples)
-        kf = KFold(n_splits=k, shuffle=False, random_state=self.seed)
+        kf = KFold(n_splits=k, shuffle=False)
         self.k_fold_split = {split_idx:None for split_idx in range(k)}
         for split_idx, (train_idx, val_idx) in enumerate(kf.split(indices)):
             self.k_fold_split[split_idx] = (train_idx, val_idx)
@@ -297,6 +299,6 @@ class BaseDatasetPipeline:
             return T_disc
         else:
             assert T_disc.shape[:-1] == T_cont.shape[:-1]
-            return np.concatenate([T_disc, T_cont], dim = -1)
+            return np.concatenate([T_disc, T_cont], axis = -1)
     
     

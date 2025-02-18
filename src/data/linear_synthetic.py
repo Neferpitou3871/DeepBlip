@@ -119,7 +119,8 @@ class linearMarkovianDataPipeline(BaseDatasetPipeline):
         self.noisex = np.zeros((self.n_units, self.sequence_length, self.n_x))
         self.noisey = np.zeros((self.n_units, self.sequence_length))
         
-        self._split_data(*self._generate_full_factual_data())
+        Y, T, X = self._generate_full_factual_data()
+        self._split_data(Y, T, X)
 
         self.train_data = self._get_torch_dataset('train')
         self.val_data = self._get_torch_dataset('val')
@@ -168,7 +169,8 @@ class linearMarkovianDataPipeline(BaseDatasetPipeline):
         Split the generated factual data into train/val/test subsets, given the ratio of self.val_split and self.test_split
         """
         #Generate indices for train, val and test
-        index = np.random.shuffle(np.arange(self.n_units))
+        index = np.arange(self.n_units)
+        np.random.shuffle(index)
         train_pos = int(self.n_units * (1 - self.val_split - self.test_split))
         val_pos = int(self.n_units * (1 - self.test_split))
         train_index, val_index, test_index = index[:train_pos], index[train_pos:val_pos], index[val_pos:]
@@ -266,9 +268,9 @@ class linearMarkovianDataPipeline(BaseDatasetPipeline):
     def _get_torch_dataset(self, subset='train'):
         logger.info(f'Creating torch dataset for {subset} of linear markovian heterodynamic dataset')
         
-        return ProcessedDataset(self.Y_obs[subset], 
-                                T_disc = None, T_cont = self.T_obs[subset], 
-                                X_static=None, X_dynamic=self.X_obs[subset],
+        return ProcessedDataset(torch.from_numpy(self.Y_obs[subset]), 
+                                T_disc = None, T_cont = torch.from_numpy(self.T_obs[subset]), 
+                                X_static=None, X_dynamic= torch.from_numpy(self.X_obs[subset]),
                                 active_entries=None, subset_name = subset)
 
 

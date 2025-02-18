@@ -180,26 +180,29 @@ class Nuisance_Network(LightningModule):
         Q_gt_all_steps_cont = Q_gt_all_steps[:, :, :, :, self.n_treatments_disc:]
         p_target = curr_outputs[:, self.n_periods - 1:].unsqueeze(-1).expand(-1, -1, self.n_periods)
 
-        p_mse = (F.mse_loss(p_pred_all_steps, p_target, reduction='none') * active_entries).mean(dim = (0, 1))
+        active_y = active_entries[:, self.n_periods - 1:].unsqueeze(-1).expand(-1, -1,self. n_periods)
+        p_mse = (F.mse_loss(p_pred_all_steps, p_target, reduction='none') * active_y).mean(dim = (0, 1))
         for i in range(p_mse.shape[0]):
             self.log(f'p{i}_mse', p_mse[i], on_epoch=True, on_step=False, sync_dist=True, prog_bar=True)
         
         upper_traingle_mask = torch.triu(torch.ones((self.n_periods, self.n_periods), dtype=torch.bool, device = self.device))
-        q_bce, q_mse = 0, 0
+        active_q = active_entries[:, self.n_periods - 1:].unsqueeze(-1).unsqueeze(-1).expand(
+                    -1, -1, int(upper_traingle_mask.sum()), 1)
+        q_bce, q_mse =  torch.tensor(0, dtype = torch.float32, device = self.device), torch.tensor(0, dtype = torch.float32, device = self.device)
         if self.n_treatments_disc > 0:
             #compute the binary cross entropy loss for the discrete treatments (Since we only implement for binary treatment)
             q_pred_disc = q_pred_all_steps_disc[:, :, upper_traingle_mask, :]
             q_target_disc = Q_gt_all_steps_disc[:, :, upper_traingle_mask, :]
-            q_bce = F.binary_cross_entropy(q_pred_disc, q_target_disc, reduction = 'none').mean(dim = (0, 1, 2))
+            q_bce = (F.binary_cross_entropy(q_pred_disc, q_target_disc, reduction = 'none') * active_q).mean()
             self.log('q_bce', q_bce, on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
         if self.n_treatments_cont > 0:
             q_pred_cont = q_pred_all_steps_cont[:, :, upper_traingle_mask, :]
             q_target_cont = Q_gt_all_steps_cont[:, :, upper_traingle_mask, :]
-            q_mse = F.mse_loss(q_pred_cont, q_target_cont, reduction='none').mean(dim = (0, 1, 2))
+            q_mse = (F.mse_loss(q_pred_cont, q_target_cont, reduction='none') * active_q).mean()
             self.log('q_mse', q_mse, on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
         
-        loss = q_bce + q_mse + p_mse.mean()
-        self.log('train_loss', loss, on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
+        loss = q_bce.mean() + q_mse.mean() + p_mse.mean()
+        self.log('train_loss', loss.item(), on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
         return loss
     
     def validation_step(self, batch, batch_ind):
@@ -217,24 +220,27 @@ class Nuisance_Network(LightningModule):
         p_target = curr_outputs[:, self.n_periods - 1:].unsqueeze(-1).expand(-1, -1, self.n_periods)
 
         #Do similar thing as in training_step
-        p_mse = (F.mse_loss(p_pred_all_steps, p_target, reduction='none') * active_entries).mean(dim = (0, 1))
+        active_y = active_entries[:, self.n_periods - 1:].unsqueeze(-1).expand(-1, -1,self. n_periods)
+        p_mse = (F.mse_loss(p_pred_all_steps, p_target, reduction='none') * active_y).mean(dim = (0, 1))
         for i in range(p_mse.shape[0]):
             self.log(f'val_p{i}_mse', p_mse[i], on_epoch=True, on_step=False, sync_dist=True, prog_bar=True)
         
         upper_traingle_mask = torch.triu(torch.ones((self.n_periods, self.n_periods), dtype=torch.bool, device = self.device))
-        q_bce, q_mse = 0, 0
+        active_q = active_entries[:, self.n_periods - 1:].unsqueeze(-1).unsqueeze(-1).expand(
+                    -1, -1, int(upper_traingle_mask.sum()), 1)
+        q_bce, q_mse =  torch.tensor(0, dtype = torch.float32, device = self.device),  torch.tensor(0, dtype = torch.float32, device = self.device)
         if self.n_treatments_disc > 0:
             q_pred_disc = q_pred_all_steps[:, :, upper_traingle_mask, :self.n_treatments_disc]
             q_target_disc = Q_gt_all_steps[:, :, upper_traingle_mask, :self.n_treatments_disc]
-            q_bce = F.binary_cross_entropy(q_pred_disc, q_target_disc, reduction = 'none').mean(dim = (0, 1))
+            q_bce = (F.binary_cross_entropy(q_pred_disc, q_target_disc, reduction = 'none') * active_q).mean(dim = (0, 1, 2))
             for i in range(q_bce.shape[0]):
-                self.log(f'val_q{i}[.]_bce', q_bce[i], on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
+                self.log(f'val_q[{i}]_bce', q_bce[i], on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
         if self.n_treatments_cont > 0:
             q_pred_cont = q_pred_all_steps[:, :, upper_traingle_mask, self.n_treatments_disc:]
             q_target_cont = Q_gt_all_steps[:, :, upper_traingle_mask, self.n_treatments_disc:]
-            q_mse = F.mse_loss(q_pred_cont, q_target_cont, reduction='none').mean(dim = (0, 1))
+            q_mse = (F.mse_loss(q_pred_cont, q_target_cont, reduction='none') * active_q).mean(dim = (0, 1, 2))
             for i in range(q_mse.shape[0]):
-                self.log(f'val_q{i}[.]_mse', q_mse[i], on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
+                self.log(f'val_q[{i}]_mse', q_mse[i], on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
 
         #p_mse = F.mse_loss(p_pred_all_steps, p_target, reduction='none').mean(dim=(0, 1))
         #q_mse = F.mse_loss(q_pred_all_steps, Q_gt_all_steps, reduction='none').mean(dim=(0, 1, -1))
@@ -245,8 +251,8 @@ class Nuisance_Network(LightningModule):
         #    for j in range(i, q_mse.shape[1]):
         #        self.log(f"val_q{j}{i}_mse", q_mse[i][j], on_epoch=True, on_step=False, sync_dist=True, prog_bar=True)
         
-        loss = p_mse.mean() + q_mse + q_bce
-        self.log('val_loss', loss, on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
+        loss = p_mse.mean() + q_mse.mean() + q_bce.mean()
+        self.log('val_loss', loss.item(), on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
         return loss
 
     def configure_optimizers(self):
@@ -300,9 +306,12 @@ class DynamicEffect_estimator(LightningModule):
         dataset_params = args.dataset
         self.model_type = 'Blip Parameter estimator network'
         self.n_treatments = dataset_params['n_treatments']
+        self.n_treatments_disc = dataset_params['n_treatments_disc']
+        self.n_treatments_cont = dataset_params['n_treatments_cont']
         self.n_x = dataset_params['n_x']
+        self.n_static = dataset_params.get('n_static', 0)
         self.n_periods = dataset_params['n_periods']
-        self.input_size = self.n_treatments + self.n_x + 1
+        self.input_size = self.n_treatments + self.n_x + self.n_static + 1
         self.sequence_length = dataset_params['sequence_length']
         self.true_effect = np.flip(true_effect, axis = 0) if true_effect is not None else None
         self.loss_type = args.model.loss_type
@@ -333,10 +342,11 @@ class DynamicEffect_estimator(LightningModule):
         ])
     
 
-    def build_hr(self, curr_covariates, prev_treatments, prev_outputs):
+    def build_hr(self, static_features, curr_covariates, prev_treatments, prev_outputs):
         """
         Build hidden representation (patient clinical state)
         """
+        static_features = static_features.unsqueeze(1).expand(-1, self.sequence_length, -1)
         x = torch.cat([curr_covariates, prev_treatments, prev_outputs.unsqueeze(-1)], dim = -1)
         x = self.lstm(x, init_states=None)
         output = self.output_dropout(x)
@@ -350,15 +360,18 @@ class DynamicEffect_estimator(LightningModule):
         prev_outpus: torch.tensor shape (b, L, 1)
         returns: estimated parameter (b, SL - m + 1, n_periods, n_treatments)
         """
-        prev_treatments = batch['prev_treatments']
-        curr_treatments = batch['curr_treatments']
-        curr_covariates = batch['curr_covariates']
         prev_outputs = batch['prev_outputs']
+        b, L = prev_outputs.size(0), prev_outputs.size(1)
+        prev_treatments_disc = batch['prev_treatments_disc'] if self.n_treatments_disc > 0 else torch.zeros((b, L, 0), device=self.device)
+        prev_treatments_cont = batch['prev_treatments_cont'] if self.n_treatments_cont > 0 else torch.zeros((b, L, 0), device=self.device)
+        prev_treatments = torch.cat([prev_treatments_disc, prev_treatments_cont], dim = -1)
+        curr_covariates = batch['curr_covariates']
+        static_features = batch['static_features']
         batch_size = prev_treatments.size(0)
         
         param_pred_all_steps = torch.zeros((batch_size, self.sequence_length - self.n_periods + 1, self.n_periods, self.n_treatments), device = self.device)
         
-        hr = self.build_hr(curr_covariates, prev_treatments, prev_outputs) # dim = (b, L. hr_size)
+        hr = self.build_hr(static_features, curr_covariates, prev_treatments, prev_outputs) # dim = (b, L. hr_size)
         for t in range(self.sequence_length - self.n_periods + 1): # t = 0, 1, ., L - m
             for l in range(self.n_periods): #l = 0, 1, . ., m - 1
                 param_pred_all_steps[:, t, l, :] = self.parameter_head[l].build_outcome(hr[:, t, :])
@@ -436,9 +449,14 @@ class DynamicEffect_estimator(LightningModule):
             par.requires_grad = True
             
     def training_step(self, batch, batch_idx):
-
+        
         res_Y_all_steps = batch['residual_Y']
-        res_T_all_steps = batch['residual_T']
+        t_len, batch_size = res_Y_all_steps.shape[1], res_Y_all_steps.shape[0]
+        res_T_disc_all_steps = batch['residual_T_disc'] if self.n_treatments_disc > 0 \
+                                    else torch.zeros(batch_size, t_len, self.n_periods, self.n_periods, 0, device = self.device)
+        res_T_cont_all_steps = batch['residual_T_cont'] if self.n_treatments_cont > 0 \
+                                    else torch.zeros(batch_size, t_len, self.n_periods, self.n_periods, 0, device = self.device)
+        res_T_all_steps = torch.cat([res_T_disc_all_steps, res_T_cont_all_steps], dim = -1)
 
         param_pred_all_steps = self(batch)
         param_pred_all_steps_detach = self(batch).detach() if self.double_opt else None
@@ -470,7 +488,12 @@ class DynamicEffect_estimator(LightningModule):
     def validation_step(self, batch, batch_idx):
 
         res_Y_all_steps = batch['residual_Y']
-        res_T_all_steps = batch['residual_T']
+        t_len, batch_size = res_Y_all_steps.shape[1], res_Y_all_steps.shape[0]
+        res_T_disc_all_steps = batch['residual_T_disc'] if self.n_treatments_disc > 0 \
+                                    else torch.zeros(batch_size, t_len, self.n_periods, self.n_periods, 0, device= self.device)
+        res_T_cont_all_steps = batch['residual_T_cont'] if self.n_treatments_cont > 0 \
+                                    else torch.zeros(batch_size, t_len, self.n_periods, self.n_periods, 0, device = self.device)
+        res_T_all_steps = torch.cat([res_T_disc_all_steps, res_T_cont_all_steps], dim = -1)
 
         param_pred_all_steps = self(batch)
         if self.loss_type == 'OLS':
@@ -503,7 +526,12 @@ class DynamicEffect_estimator(LightningModule):
         with torch.no_grad():
             for batch_idx, batch in enumerate(dataloader):
                 res_Y_all_steps = batch['residual_Y']
-                res_T_all_steps = batch['residual_T']
+                t_len, batch_size = res_Y_all_steps.shape[1], res_Y_all_steps.shape[0]
+                res_T_disc_all_steps = batch['residual_T_disc'] if self.n_treatments_disc > 0 \
+                                            else torch.zeros(batch_size, t_len, self.n_periods, self.n_periods, 0)
+                res_T_cont_all_steps = batch['residual_T_cont'] if self.n_treatments_cont > 0 \
+                                            else torch.zeros(batch_size, t_len, self.n_periods, self.n_periods, 0)
+                res_T_all_steps = torch.cat([res_T_disc_all_steps, res_T_cont_all_steps], dim = -1)
                 true_effect_expanded = true_effect.expand(res_Y_all_steps.shape[0], K, self.n_periods, self.n_treatments)
                 moment_losses = self.moment_loss(true_effect_expanded, None, res_Y_all_steps, res_T_all_steps)
                 result.append(moment_losses)
@@ -582,7 +610,7 @@ class DynamicEffect_estimator(LightningModule):
             return T_disc
         else:
             assert T_disc.shape[:-1] == T_cont.shape[:-1]
-            return torch.cat([T_disc, T_cont], dim = -1)
+            return np.concatenate([T_disc, T_cont], axis = -1)
 
         
 
