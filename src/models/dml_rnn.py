@@ -233,13 +233,13 @@ class Nuisance_Network(LightningModule):
             q_pred_disc = q_pred_all_steps[:, :, upper_traingle_mask, :self.n_treatments_disc]
             q_target_disc = Q_gt_all_steps[:, :, upper_traingle_mask, :self.n_treatments_disc]
             q_bce = (F.binary_cross_entropy(q_pred_disc, q_target_disc, reduction = 'none') * active_q).mean(dim = (0, 1, 2))
-            for i in range(q_bce.shape[0]):
+            for i in range(q_bce.shape[0]): #for every dimension of the discrete treatment
                 self.log(f'val_q[{i}]_bce', q_bce[i], on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
         if self.n_treatments_cont > 0:
             q_pred_cont = q_pred_all_steps[:, :, upper_traingle_mask, self.n_treatments_disc:]
             q_target_cont = Q_gt_all_steps[:, :, upper_traingle_mask, self.n_treatments_disc:]
             q_mse = (F.mse_loss(q_pred_cont, q_target_cont, reduction='none') * active_q).mean(dim = (0, 1, 2))
-            for i in range(q_mse.shape[0]):
+            for i in range(q_mse.shape[0]): #for every dimension of the continuous treatment
                 self.log(f'val_q[{i}]_mse', q_mse[i], on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
 
         #p_mse = F.mse_loss(p_pred_all_steps, p_target, reduction='none').mean(dim=(0, 1))

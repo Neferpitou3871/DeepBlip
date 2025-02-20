@@ -60,6 +60,7 @@ class SyntheticOutcomeGenerator:
     def simulate_untreated(self, all_vitals: pd.DataFrame, static_features: pd.DataFrame):
         """
         Simulate untreated outcomes (Z)
+        Z  = endogenous effect + exogenous effect (depend on the vitals) + noise
         Args:
             all_vitals: Time-varying covariates (as exogeneous vars)
             static_features: Static covariates (as exogeneous vars)
@@ -437,6 +438,10 @@ class MIMIC3SyntheticDataset(Dataset):
             seed (int, optional): Random seed for reproducibility. Defaults to None.
         Returns:
             pandas.DataFrame: DataFrame containing the patient's data with factually treated outcomes.
+        Note:
+            The treatment at hour index t is based on the information of time [t - window, t]
+            And the treatment value assigned as t_prev at hour index t + 1, which means at hour 0 no treatment is applied.
+            The treatment at hour index t affects the outcome starting from t + 1 (has a limited window of effect)
         """
         patient_df = self.all_vitals.loc[patient_ix].copy()
         rng = np.random.RandomState(seed)

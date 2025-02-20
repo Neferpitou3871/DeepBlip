@@ -10,7 +10,13 @@ class ProcessedDataset(Dataset):
     """
     Dataset object for the processed data fed to the training of the model
     """
-    def __init__(self, Y, T_disc = None, T_cont = None, X_static = None, X_dynamic = None, active_entries = None, subset_name = 'train'):
+    def __init__(self, Y, T_disc = None, T_cont = None, X_static = None, X_dynamic = None, 
+                 active_entries = None, subset_name = 'train', **kwargs):
+        """
+        Initialize the dataset object which will be used for training the model, 
+        the arguments should be torch tensors.
+        """
+        
         self.subset_name = subset_name
         self.Y = Y
         self.T_disc = T_disc
@@ -22,10 +28,20 @@ class ProcessedDataset(Dataset):
         self.active_entries = active_entries if active_entries is not None \
             else torch.ones_like(Y, dtype=torch.float32)
         
-        self.prev_Y = torch.zeros_like(Y)
-        self.prev_Y[:, 1:] = Y[:, :-1]
-        self.prev_T_disc = torch.zeros_like(T_disc) if T_disc is not None else None
-        self.prev_T_cont = torch.zeros_like(T_cont) if T_cont is not None else None
+        #For prev_Y, prev_T_disc, prev_T_cont, we first try to load from kwargs, and if not available, 
+        # we initialize them as zeros and fill them with the previous values
+        self.prev_Y = kwargs.get('prev_Y', None)
+        if self.prev_Y is None:
+            self.prev_Y = torch.zeros_like(Y)
+            self.prev_Y[:, 1:] = Y[:, :-1]
+        self.prev_T_disc = kwargs.get('prev_T_disc', None)
+        self.prev_T_cont = kwargs.get('prev_T_cont', None)
+        if (self.prev_T_disc is None) and (T_disc is not None):
+            self.prev_T_disc = torch.zeros_like(T_disc)
+            self.prev_T_disc[:, 1:, :] = T_disc[:, :-1, :]
+        if (self.prev_T_cont is None) and (T_cont is not None):
+            self.prev_T_cont = torch.zeros_like(T_cont)
+            self.prev_T_cont[:, 1:, :] = T_cont[:, :-1, :]
 
         self.disc_dim = T_disc.shape[2] if T_disc is not None else 0
         self.cont_dim = T_cont.shape[2] if T_cont is not None else 0

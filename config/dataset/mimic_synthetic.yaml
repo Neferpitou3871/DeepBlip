@@ -1,5 +1,6 @@
 # @package _global_
 dataset:
+  _target_: src.data.mimic.semi_synthetic_pipeline.MIMICSemiSyntheticDataPipeline
   seed: 2025
   name: mimic3_synthetic
   path: 'C:\Users\mhr_k\Data\mimic_extract\all_hourly_data_1000.h5'                  # Path with MIMIC-3 dataset (HDFStore)

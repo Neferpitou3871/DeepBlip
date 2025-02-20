@@ -1,5 +1,5 @@
 mlflow server --port=3333
-python scripts/train_dml_rnn.py +dataset=synthetic +model=dml_rnn
+python scripts/train_dml_rnn.py +dataset=linear_synthetic +model=dml_rnn
 python scripts/train_dml_rnn.py --multirun +dataset=synthetic +model=dml_rnn +model/dml_rnn_hparams=grid_search_synthetic
 python scripts/train_dml_rnn.py --multirun +dataset=synthetic +model=dml_rnn +model/dml_rnn_hparams=compare_nuisance
 

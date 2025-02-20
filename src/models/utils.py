@@ -86,9 +86,8 @@ def plot_de_est_distribution(mlf_logger, param_pred, true_effect, args):
     """
     distribution of dynamic effects
     Args:
-        resY: shape (n_units, SL - n_period + 1, n_period)
-        resT: shape (n_units, SL - n_period + 1, n_period, n_period, n_treatments)
-        
+        param_pred: torch.Tensor of shape [D, SL - m + 1, m, n_t]
+        true_effect: numpy array of shape [m, n_t]
     results logged to mlflow
     """
     logger.info("Visualising param estimation")
@@ -118,16 +117,50 @@ def plot_de_est_distribution(mlf_logger, param_pred, true_effect, args):
             ax.axvline(true_val, color='red', linestyle='--', linewidth=2,
                        label=f"GT = {true_val:.2f}")
 
-            ax.set_title(f"param est for period={i}, tidx={t}")
+            ax.set_title(f"Dynamic_effect est for period={i}, tidx={t}")
             ax.legend(loc="best")
     
     if mlf_logger is not None:
         mlflow.set_tracking_uri(args.exp.mlflow_uri)
         with mlflow.start_run(run_id=mlf_logger.run_id, nested=True):
-            mlflow.log_figure(fig, "param_est_hist_nonhetero.png")
+            mlflow.log_figure(fig, "de_est_hist_nonhetero.png")
     plt.close(fig)
     return
 
+def plot_de_est_diff_distribution(mlf_logger, param_pred, individual_true_effect, args):
+    """
+    plot distribution of the difference between estimated and true effect on a individual level
+    Args:
+        param_pred: torch.Tensor of shape [D, SL - m + 1, m, n_t]
+        individual_true_effect: numpy array of shape [D, SL - m + 1, m, n_t]
+    results logged to mlflow
+    """
+    logger.info("Visualising param estimation on an individual level")
+    param_pred_np = param_pred.detach().cpu().numpy()
+    te_diff = param_pred_np - individual_true_effect
+    m = args.dataset.n_periods
+    n_t = args.dataset.n_treatments
+    fig, axes = plt.subplots(nrows=m, ncols=n_t, figsize=(4 * n_t, 3 * m), sharex=False, sharey=False)
+    if m == 1 and n_t == 1:
+        axes = np.array([[axes]])
+    elif m == 1:
+        axes = axes.reshape(1, n_t)
+    elif n_t == 1:
+        axes = axes.reshape(m, 1)
+    for i in range(m):
+        for t in range(n_t):
+            ax = axes[i, t]
+            # Distribution (histogram) of predictions for row i, time t
+            ax.hist(te_diff[:, :, i, t].flatten(), bins=100, alpha=0.7, color='blue')
+            ax.set_title(f"Dynamic_effect error for period={i}, tidx={t}")
+            ax.legend(loc="best")
+    if mlf_logger is not None:
+        mlflow.set_tracking_uri(args.exp.mlflow_uri)
+        with mlflow.start_run(run_id=mlf_logger.run_id, nested=True):
+            mlflow.log_figure(fig, "de_est_hist_hetero.png")
+    plt.close(fig)
+    return
+    
 
 def dataset_to_array(args:DictConfig, dataset:Dataset):
     seq_length = args.dataset.sequence_length

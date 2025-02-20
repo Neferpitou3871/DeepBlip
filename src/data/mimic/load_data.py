@@ -166,7 +166,7 @@ def load_mimic3_data_raw(data_path: str,
                          static_list: List[str] = None,
                          data_seed: int = 100,
                          drop_first=False,
-                         **kwargs) -> (pd.DataFrame, pd.DataFrame):
+                         **kwargs) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Load MIMIC-3 hourly averaged dataset, without preprocessing (for semi-synthetic experiments)
     :param data_path: Path with MIMIC-3 dataset (HDFStore)

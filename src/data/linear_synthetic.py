@@ -272,12 +272,3 @@ class linearMarkovianDataPipeline(BaseDatasetPipeline):
                                 T_disc = None, T_cont = torch.from_numpy(self.T_obs[subset]), 
                                 X_static=None, X_dynamic= torch.from_numpy(self.X_obs[subset]),
                                 active_entries=None, subset_name = subset)
-
-
-
-        
-
-
-
-
-        

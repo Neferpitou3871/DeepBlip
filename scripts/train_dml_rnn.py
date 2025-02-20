@@ -11,7 +11,7 @@ from pytorch_lightning.utilities.seed import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from src.utils import FilteringMlFlowLogger
 from src.models.dml_rnn import Nuisance_Network, DynamicEffect_estimator
-from src.models.utils import evaluate_nuisance_mse, plot_residual_distribution, plot_de_est_distribution, transform_residual_data
+from src.models.utils import evaluate_nuisance_mse, plot_residual_distribution, plot_de_est_distribution, transform_residual_data, plot_de_est_diff_distribution
 from src.utils import log_params_from_omegaconf_dict, create_loaders_with_indices
 import pickle
 import numpy as np
@@ -177,8 +177,10 @@ def main(args: DictConfig):
     #When individual true dynamic effect is available, log the mse / plot distribution
     if data_pipeline.gt_dynamic_effect_available:
         individual_true_effect = data_pipeline.compute_individual_true_dynamic_effects(X = data_pipeline.test_data.X_dynamic)
-        if (len(args.dataset.hetero_inds) == 0) or (args.dataset.hetero_inds == None):
-            plot_de_est_distribution(mlf_logger_de, predicted_de, individual_true_effect, args)
+        if (len(args.dataset.hetero_inds) == 0) or (args.dataset.hetero_inds == None): #Only for Non-hetero estimation
+            plot_de_est_distribution(mlf_logger_de, predicted_de, data_pipeline.true_effect, args)
+        else:
+            plot_de_est_diff_distribution(mlf_logger_de, predicted_de, individual_true_effect, args)
     
     logger.info("Evaluate individual treatment effect")
     T_intv_disc, T_base_disc = (np.ones((args.dataset.n_periods, disc_dim)), np.zeros((args.dataset.n_periods, disc_dim))) \
