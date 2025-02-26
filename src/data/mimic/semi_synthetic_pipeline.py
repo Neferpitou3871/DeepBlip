@@ -29,6 +29,7 @@ class MIMICSemiSyntheticDataPipeline(BaseDatasetPipeline):
                  treatment_outcomes_influence: Dict[str, list[str]],
                  autoregressive: bool = True,
                  parallel: bool = False,
+                 te_model: str = 'min',
                  split = {'val': 0.15, 'test': 0.15},
                  seed=2025,
                  **kwargs):
@@ -39,7 +40,7 @@ class MIMICSemiSyntheticDataPipeline(BaseDatasetPipeline):
                          n_treatments_disc= len(synth_treatments_list),
                          n_units = max_number,
                          n_periods = n_periods,
-                         sequence_length= max_seq_length,
+                         sequence_length= max_seq_length - 1,
                          split = split,
                          kwargs = kwargs)
         
@@ -51,11 +52,30 @@ class MIMICSemiSyntheticDataPipeline(BaseDatasetPipeline):
         self.path = path,
         self.min_seq_length = min_seq_length
         self.max_seq_length = max_seq_length
+        self.sequence_length = max_seq_length - 1
         self.vital_cols = vital_list
         self.static_list = static_list
         self.autoregressive = autoregressive
         self.parallel = parallel
         self.name = 'MIMIC-III Semi-Synthetic Data Pipeline'
+        self.gt_dynamic_effect_available = True
+        self.betas = np.array([treat.full_effect for treat in self.synthetic_treatments])
+        if self.synthetic_treatments[0].scale_function['type'] == 'tanh':
+            logger.info("Creating hetero true dynamic effects")
+            self.true_effect_hetero_multiplier = np.stack(
+                [self.betas / (i + 1)**0.5 for i in range(n_periods)], axis = 0
+            )
+            self.true_effect = None
+        elif self.synthetic_treatments[0].scale_function['type'] == 'identity':
+            logger.info("Creating homogenous true dynamic effects")
+            self.true_effect = np.stack(
+                [self.betas / (i + 1)**0.5 for i in range(n_periods)], axis = 0
+            )
+            self.true_effect_hetero_multiplier = None
+        else:
+            raise ValueError(f"Unknown scale function type: {self.synthetic_treatments[0].scale_function['type']}")
+
+        self.te_model = te_model
 
         self.all_vitals, self.static_features = load_mimic3_data_raw(path, min_seq_length, max_seq_length, 
                                                                      max_number=max_number, 
@@ -83,12 +103,13 @@ class MIMICSemiSyntheticDataPipeline(BaseDatasetPipeline):
         par = Parallel(n_jobs=4, backend='loky')
         seeds = np.random.randint(0, 10000, size=len(self.static_features))
         if parallel:
-            self.all_vitals = par(delayed(self.treat_patient_factually)(patient_ix, seed)
+            self.all_vitals = par(delayed(self.treat_patient_factually)(patient_ix, seed, self.te_model)
                             for patient_ix, seed in tqdm(zip(self.static_features.index, seeds), total=len(self.static_features)))
         else:
             #Process all the patients sequentially
-            self.all_vitals = [self.treat_patient_factually(patient_ix, seed) for patient_ix, seed in \
+            self.all_vitals = [self.treat_patient_factually(patient_ix, seed, self.te_model) for patient_ix, seed in \
                                         tqdm(zip(self.static_features.index, seeds), total=len(self.static_features))]
+        self.factual_generated = True
         logger.info('Concatenating all the trajectories together.')
         #Each single patient dataframe has new columns: 
         # ['y1_exog', 'y1_endo', 'y1_untreated', 'y1', 'y2_exog'.., 'y2', 'fact', 't1', 't2']
@@ -108,7 +129,7 @@ class MIMICSemiSyntheticDataPipeline(BaseDatasetPipeline):
         self.outcome_unscaled = self.all_vitals[self.outcome_col].fillna(0.0).values.reshape((-1, max(user_sizes)))
         self.outcome_scaled = self._get_scaled_outcome()
         self.active_entries = (~self.all_vitals.isna().all(1)).astype(float)
-        self.active_entries = self.active_entries.values.reshape((-1, max(user_sizes), 1))
+        self.active_entries = self.active_entries.values.reshape((-1, max(user_sizes)))
         self.user_sizes = np.squeeze(self.active_entries.sum(1))
 
         logger.info(f'Shape of exploded vitals: {self.vitals_np.shape}.')
@@ -154,7 +175,7 @@ class MIMICSemiSyntheticDataPipeline(BaseDatasetPipeline):
         train_index, val_index, test_index = index[:train_pos], index[train_pos:val_pos], index[val_pos:]
         self.train_index, self.val_index, self.test_index = train_index, val_index, test_index
         self.index = {'train': train_index, 'val': val_index, 'test': test_index}
-        logger.info(f'Split data into train, val, test by {self.index}.')
+        #logger.info(f'Split data into train, val, test by {self.index}.')
 
         return
     
@@ -201,10 +222,10 @@ class MIMICSemiSyntheticDataPipeline(BaseDatasetPipeline):
 
         return ProcessedDataset(Y = Y, prev_Y = prev_Y,
                                 T_disc = T_disc, T_cont = None, T_disc_prev = T_disc_prev, T_cont_prev = None,
-                                X_staic = X_static, X_dynamic = X_dynamic, 
+                                X_static = X_static, X_dynamic = X_dynamic, 
                                 active_entries = active_entries, subset_name = subset)
 
-    def treat_patient_factually(self, patient_ix: int, seed: int):
+    def treat_patient_factually(self, patient_ix: int, seed: int, te_model = 'min'):
         """
         Generate factually treated outcomes for a patient.
             patient_ix (int): Index of the patient in the dataset.
@@ -224,22 +245,25 @@ class MIMICSemiSyntheticDataPipeline(BaseDatasetPipeline):
 
             # Sampling treatments, based on previous factual outcomes
             treat_probas, treat_flags = self._sample_treatments_from_factuals(patient_df, t, rng)
-
             if t < max(patient_df.index.get_level_values('hours_in')):
                 # Setting factuality flags
                 patient_df.loc[t + 1, 'fact'] = 1.0
-
                 # Setting factual sampled treatments
                 patient_df.loc[t + 1, curr_treatment_cols] = {t: v for t, v in treat_flags.items()}
-
-                # Treatments applications
-                if sum(treat_flags.values()) > 0:
-
-                    # Treating each outcome separately
-                    for outcome in self.synthetic_outcomes:
-                        common_treatment_range, future_outcomes = self._combined_treating(patient_df, t, outcome, treat_probas,
-                                                                                          treat_flags)
-                        patient_df.loc[common_treatment_range, f'{outcome.outcome_name}'] = future_outcomes
+                if te_model == 'min':
+                    # Treatments applications
+                    if sum(treat_flags.values()) > 0:
+                        # Treating each outcome separately
+                        for outcome in self.synthetic_outcomes:
+                            common_treatment_range, future_outcomes = self._combined_treating(patient_df, t, outcome, treat_probas,
+                                                                                            treat_flags)
+                            patient_df.loc[common_treatment_range, f'{outcome.outcome_name}'] = future_outcomes
+                elif te_model == 'sum':
+                    # The effect of current treatment at t are added to the future outcomes [t, .., t+window]
+                    if sum(treat_flags.values()) > 0:
+                        treatment_range, future_added_effects = self._add_treatment_effects(patient_df, t, treat_flags)
+                        for outcome in self.synthetic_outcomes:
+                            patient_df.loc[treatment_range, f'{self.outcome_col}'] += future_added_effects
 
         return patient_df
     
@@ -292,6 +316,124 @@ class MIMICSemiSyntheticDataPipeline(BaseDatasetPipeline):
         )
         return common_treatment_range, future_outcomes
     
+    def _add_treatment_effects(self, patient_df, t, treat_flags):
+        """
+        Add treatment effects to the future outcomes
+        Args:
+            patient_df: DataFrame of patient
+            t: Time-step
+            treat_flags: Treatment application flags
+            
+        Returns: Treatment range, future added effects of the combined treatments
+        """
+        if sum(treat_flags.values()) == 0:
+            return [], 0
+        influencing_treatments = [treatment for treatment in self.synthetic_treatments if treat_flags[treatment.treatment_name] > 0]
+        treatment_ranges, future_added_effects = [set()], []
+        for treatment in influencing_treatments:
+            treatment_range, added_effects = treatment.get_added_effect(patient_df, t, treat_flags[treatment.treatment_name])
+            treatment_ranges.append(set(treatment_range) if treat_flags[treatment.treatment_name] > 0 else set())
+            future_added_effects.append(added_effects)
+        
+        common_treatment_range = set.union(*treatment_ranges)
+        common_treatment_range = sorted(list(common_treatment_range))
+        maximal_length = len(common_treatment_range)
+        #first pad the shorter added_effects to maximal length and then stack them to sum up
+        future_added_effects = np.stack([np.pad(added_effects, (0, maximal_length - len(added_effects))) 
+                                         for added_effects in future_added_effects], axis = 1).sum(axis = 1)
+        
+        return common_treatment_range, future_added_effects                 
+    
+    def _simulate_counterfactuals(self, subset_name: str, treatment_seq: np.array, intv_name: str = 'intv'):
+        """
+        Simulate counterfactual outcomes based on a fixed sequence of treatments
+        The counterfactual outcomes are then saved in the dictionary self.counterfactual_outcomes
+        """
+        self.treatments_seq = treatment_seq
+        seeds = np.random.randint(0, 10000, size=self.n_units)
+        subset_indices = self.index[subset_name]
+        if self.parallel:
+            par = Parallel(n_jobs=4, backend='loky')
+            all_vitals_subset = par(delayed(self.treat_patient_counterfactually)(patient_ix, intv_name, seed=seed, te_model=self.te_model)
+                                  for patient_ix, seed in tqdm(zip(subset_indices, seeds), total=len(subset_indices)))
+        else:
+            all_vitals_subset = [self.treat_patient_counterfactually(patient_ix, intv_name, seed, self.te_model) for patient_ix, seed in \
+                                        tqdm(zip(subset_indices, seeds), total=len(subset_indices))]
+
+        ctf_outcomes = pd.concat(all_vitals_subset, keys=subset_indices)[f'{intv_name}_{self.synth_outcome.outcome_name}']
+        Y_ctf = ctf_outcomes.values.reshape((len(subset_indices), -1))[:, self.n_periods:]
+        return Y_ctf
+    
+    def treat_patient_counterfactually(self, patient_ix: int, intv_name: str = 'intv', seed: int = None, te_model = 'min'):
+        """
+        Generate counterfactually treated outcomes for a patient using a rolling intervention approach.
+        The intervention is self.treatments_seq, which is a fixed sequence of treatments.
+    
+        For time steps before t=1, factual observations are kept. Starting at t=0,
+        for each intervention round, we intervene over a horizon of (m = projection_horizon + 1) time-steps.
+        For example, if projection_horizon = 2, then with factual covariates at t=0, we simulate interventions (and 
+        compute counterfactual outcomes) at t=0, 1, 2, then roll forward (intervene at 1,2,3, etc.).
+        when t = k, we use the factual data from t=0 to t=k-1 plus factual covariate at t=k to simulate counterfactual outcomes at t=k, k+1, k+2.
+    
+        The counterfactual outcomes for each round are stored in new columns named by f'ctf_{outcome.outcome_name}'.
+        Args:
+            patient_ix: Index of patient
+            intv_name: Name of the intervention (intv or base)
+            seed: Random seed
+
+        Returns: 
+            DataFrame of patient, with counterfactual outcomes {intv_name}_y1, {intv_name}_y2,.. appended as new columns
+        """
+        patient_df = self.all_vitals.loc[patient_ix].copy()
+        rng = np.random.RandomState(seed)
+        #computes the number of active entries for each patient (<= max(hours_in)), 
+        # patient_ae.sum() - 1 is the index of last active entry
+        patient_ae = np.logical_not(patient_df.drop(columns=['fact']).isna().all(1)).astype(float)
+        # Counterfactual sequence starts at last active entry minus projection horizon
+        m = self.n_periods
+        max_active_index = int(patient_ae.sum() - 1)
+
+        treatment_cols = [f'{treatment.treatment_name}' for treatment in self.synthetic_treatments]
+        intv_seq = self.treatments_seq
+
+        #create columns for counterfactual outcomes
+        for outcome in self.synthetic_outcomes:
+            patient_df[f'{intv_name}_{outcome.outcome_name}'] = np.nan
+        #for t in range(max(patient_df.index.get_level_values('hours_in')) - m + 1):
+        for t in range(max_active_index - m + 2):
+            assert (intv_seq.shape == (m, len(self.synthetic_treatments)))
+            # --------------- Counterfactual treatment treatment trajectories ---------------
+            buffer_patient_df = patient_df.copy()
+            for time_ind in range(m):
+                #intervene at t + time_ind
+                future_treat_probs = {treatment.treatment_name: 1.0 for treatment in self.synthetic_treatments}
+                future_treat_flags = {treatment.treatment_name: intv_seq[time_ind][j]
+                                        for j, treatment in enumerate(self.synthetic_treatments)}
+
+                # Setting treatment flags
+                buffer_patient_df.loc[t + time_ind, treatment_cols] = \
+                    {f'{t}': v for t, v in future_treat_flags.items()}
+
+                # Treating each outcome separately, updaing counterfactual outcomes for t+index,..,t+m-1
+                if te_model == 'min':
+                    for outcome in self.synthetic_outcomes:
+                        common_treatment_range, future_outcomes = \
+                            self._combined_treating(buffer_patient_df, t + time_ind, outcome,
+                                                    future_treat_probs, future_treat_flags)
+                        buffer_patient_df.loc[common_treatment_range, outcome.outcome_name] = future_outcomes
+                elif te_model == 'sum':
+                    for outcome in self.synthetic_outcomes:
+                        if sum(future_treat_flags.values()) > 0:
+                            treatment_range, future_added_effects = self._add_treatment_effects(buffer_patient_df, t + time_ind, future_treat_flags)
+                            buffer_patient_df.loc[treatment_range, outcome.outcome_name] += future_added_effects
+
+
+            for outcome in self.synthetic_outcomes:
+                patient_df.loc[t + m - 1, f'{intv_name}_{outcome.outcome_name}'] = buffer_patient_df.loc[t + m - 1, outcome.outcome_name]
+
+        return patient_df
+
+
 
     def plot_timeseries(self, n_patients=5, mode='factual', seed = None):
         """
@@ -346,6 +488,17 @@ class MIMICSemiSyntheticDataPipeline(BaseDatasetPipeline):
 
         fig.suptitle(f'Time series from {self.name}', fontsize=16)
         plt.show()
+    
+    def insert_necessary_args_dml_rnn(self, args):
+        args.dataset['n_treatments_disc'] = len(self.synthetic_treatments)
+        args.dataset['n_treatments_cont'] = 0
+        args.dataset['n_treatments'] = len(self.synthetic_treatments)
+        args.dataset['n_units'] = self.n_units
+        args.dataset['n_periods'] = self.n_periods
+        args.dataset['sequence_length'] = self.sequence_length
+        args.dataset['n_x'] = len(self.vital_cols)
+        args.dataset['n_static'] = self.static_features.shape[1]
+        return
 
 
     

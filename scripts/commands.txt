@@ -5,3 +5,5 @@ python scripts/train_dml_rnn.py --multirun +dataset=synthetic +model=dml_rnn +mo
 
 python scripts/train_dml_hetero.py +dataset=synthetic +model=dml_hetero
 python scripts/train_dml.py +dataset=synthetic +model=dml
+
+python scripts/train_dml_rnn.py +dataset=mimic_synthetic_debug +model=dml_rnn

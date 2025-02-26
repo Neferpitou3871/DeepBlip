@@ -57,7 +57,7 @@ class linearMarkovianDataPipeline(BaseDatasetPipeline):
             sequence_length=sequence_length,
             split=split,
         )
-
+        self.name = 'linear_markovian_heterodynamic'
         self.sigma_x = sigma_x
         self.sigma_y = sigma_y
         self.n_x = n_x
@@ -272,3 +272,7 @@ class linearMarkovianDataPipeline(BaseDatasetPipeline):
                                 T_disc = None, T_cont = torch.from_numpy(self.T_obs[subset]), 
                                 X_static=None, X_dynamic= torch.from_numpy(self.X_obs[subset]),
                                 active_entries=None, subset_name = subset)
+    
+    def insert_necessary_args_dml_rnn(self, args):
+        """No additional arguments are needed for this dataset"""
+        return

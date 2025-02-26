@@ -92,7 +92,7 @@ def plot_de_est_distribution(mlf_logger, param_pred, true_effect, args):
     """
     logger.info("Visualising param estimation")
     
-    assert (len(args.dataset.hetero_inds) == 0) or (args.dataset.hetero_inds == None), "Only for Non-hetero estimation"
+    #assert (len(args.dataset.hetero_inds) == 0) or (args.dataset.hetero_inds == None), "Only for Non-hetero estimation"
     param_pred_np = param_pred.detach().cpu().numpy()
     D, K, m, n_t = param_pred_np.shape
     param_pred_2d = param_pred_np.reshape(D * K, m, n_t)

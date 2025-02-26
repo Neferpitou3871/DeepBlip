@@ -189,7 +189,7 @@ class BaseDatasetPipeline:
         """
         raise NotImplementedError("Subclasses should implement this method.")
 
-    def _simulate_counterfactuals(self, treatment_seq, subset_name):
+    def _simulate_counterfactuals(self, subset_name, treatment_seq, **kwargs):
         """
         Simulate counterfactual data given a fixed treatment sequence.
         The simulation is performed on the specified subset (train, val or test).
@@ -216,8 +216,8 @@ class BaseDatasetPipeline:
         assert baseline_T.shape == (self.n_periods, self.n_treatments)
         
         # Simulate counterfactuals
-        Y_intervention = self._simulate_counterfactuals(subset, intervention_T)
-        Y_baseline = self._simulate_counterfactuals(subset, baseline_T)
+        Y_intervention = self._simulate_counterfactuals(subset, intervention_T) #shape (n_subset, sequence_length - m + 1)
+        Y_baseline = self._simulate_counterfactuals(subset, baseline_T) # shape (n_subset, sequence_length - m + 1)
         
         # Calculate treatment effects starting from t=n_periods-1
         return Y_intervention - Y_baseline
@@ -316,5 +316,11 @@ class BaseDatasetPipeline:
         else:
             assert T_disc.shape[:-1] == T_cont.shape[:-1]
             return np.concatenate([T_disc, T_cont], axis = -1)
+        
+    def insert_necessary_args_dml_rnn(self, args):
+        """
+        Insert necessary arguments for DML-RNN (in-place operation)
+        """
+        raise NotImplementedError("Subclasses should implement this method.")
     
     

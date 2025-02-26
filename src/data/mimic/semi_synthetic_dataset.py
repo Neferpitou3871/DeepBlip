@@ -104,7 +104,8 @@ class SyntheticTreatment:
                  full_effect: float,
                  effect_window: float,
                  treatment_name: str,
-                 post_nonlinearity: callable = None):
+                 post_nonlinearity: callable = None,
+                 **kwargs):
         """
         Args:
             confounding_vars: Confounding time-varying covariates (from all_vitals)
@@ -124,6 +125,15 @@ class SyntheticTreatment:
         self.confounding_dependency = confounding_dependency
         self.treatment_name = treatment_name
         self.post_nonlinearity = post_nonlinearity
+        if 'scale_function' in kwargs:
+            self.scale_function = kwargs['scale_function']
+            if self.scale_function['type'] == 'tanh':
+                self.coeff = np.array(self.scale_function['coefficients'])
+                self.kappa = lambda x: np.tanh(np.dot(x, self.coeff)) + 1
+            else:
+                self.kappa = lambda x: 1.0
+        else:
+            self.scale_function = None
 
         # Parameters
         self.window = window
@@ -156,6 +166,7 @@ class SyntheticTreatment:
 
     def get_treated_outcome(self, patient_df, t, outcome_name, treat_proba=1.0, treat=True):
         """
+        !!For calculation of min aggregation of treatment effects!!
         Calculate future outcome under treatment, applied at the time-step t
         Args:
             patient_df: DataFrame of patient
@@ -167,8 +178,12 @@ class SyntheticTreatment:
         Returns: Effect window, treated outcome
         """
         scaled_effect = self.full_effect * treat_proba
+        #t_stop should be limited by the maximal index of non NaN values instead of the maximal index of the dataframe
+        #t_stop = min(max(patient_df.index.get_level_values('hours_in')), t + self.effect_window)
+        # get index of last active entry of outcome (not Nan)
+        max_acitve_index = np.logical_not(patient_df[outcome_name].isna()).sum() - 1
+        t_stop = min(max_acitve_index + 1, t + self.effect_window)
 
-        t_stop = min(max(patient_df.index.get_level_values('hours_in')), t + self.effect_window)
         treatment_range = np.arange(t, t_stop)
         treatment_range_rel = treatment_range - t + 1
 
@@ -176,15 +191,63 @@ class SyntheticTreatment:
         if treat:
             future_outcome += scaled_effect / treatment_range_rel ** 0.5
         return treatment_range, future_outcome
+    
+    def get_added_effect(self, patient_df, t, treat_flag = True):
+        """
+        Calculate the added effect of the treatment at time step t
+        Args:
+            patient_df: DataFrame of patient
+            t: Time-step
+            treat_flag: Treatment application flag
+
+        Returns: Effect window, treated effect of this single treatment to be added to the outcome
+
+        added_effects = [kappa(x_{s}) * beta / sqrt(s - t + 1) * I_{treat_flag} for s in [t, t + w_l]]
+        """
+        max_acitve_index = np.logical_not(patient_df[self.treatment_name].isna()).sum() - 1
+        t_stop = min(max_acitve_index + 1, t + self.effect_window)
+
+        treatment_range = np.arange(t, t_stop)
+        treatment_range_rel = treatment_range - t + 1
+
+        added_effects = 0.0
+        if treat_flag:
+            # get confounding variables
+            x_conf = patient_df.loc[treatment_range, self.confounding_vars].values #shape (w_l, len(confounding_vars))
+            kappa = self.kappa(x_conf) #shape (w_l,)
+            added_effects = kappa * self.full_effect / (treatment_range_rel ** 0.5)
+        return treatment_range, added_effects
+
 
     @staticmethod
     def combine_treatments(treatment_ranges, treated_future_outcomes, treat_flags):
         """
         Min combining of different treatment effects
         Args:
-            treatment_ranges: List of effect windows w_l
-            treated_future_outcomes: Future outcomes under each individual treatment
-            treat_flags: Treatment application flags
+            treatment_ranges: List of numpy arrays of treatment ranges
+            #Example: (when t = 3, and two discrete binary treatments are applied)
+            [
+                array([3, 4, 5, 6, 7]), 
+                array([3, 4, 5, 6])
+            ]
+
+            treated_future_outcomes: Future outcomes (in list of pandas.Series) under each individual treatment
+            [ # List of treated outcomes under different treatments (example for 2 treatments with different effects and ranges)
+                hours_in
+                    3   -2.315110
+                    4   -2.014812
+                    5   -1.431916
+                    6   -1.290260
+                    7   -1.011298
+                    Name: y1, dtype: float64, 
+                hours_in
+                    3   -2.115110
+                    4   -1.873390
+                    5   -1.316446
+                    6   -1.190260
+                    Name: y1, dtype: float64
+            ]
+            treat_flags: Treatment application flags,  example: array([ True,  True])
 
         Returns: Combined effect window, combined treated outcome
         """
@@ -195,7 +258,22 @@ class SyntheticTreatment:
             common_treatment_range = set.union(*common_treatment_range)
             common_treatment_range = sorted(list(common_treatment_range))
             treated_future_outcomes = treated_future_outcomes.loc[common_treatment_range]
-            treated_future_outcomes['agg'] = np.nanmin(treated_future_outcomes.iloc[:, treat_flags].values, axis=1)
+            # When doing the np.nanmin operation, there is possibility that all the values are nan, which will result in nan warning,
+            # However, this should not happend, and we would like to create a mechanism to catch this error
+            # treated_future_outcomes['agg'] = np.nanmin(treated_future_outcomes.iloc[:, treat_flags].values, axis=1)
+            treated_outcome_flag = treated_future_outcomes.iloc[:, treat_flags].values
+            # Check for every row if all the values are nan
+            if np.isnan(treated_outcome_flag).all(1).any():
+                #find time steps where all the values are nan
+                nan_time_steps = np.where(np.isnan(treated_outcome_flag).all(1))[0]
+                not_all_nan_time_steps = np.where(~np.isnan(treated_outcome_flag).any(1))[0]
+                print('All values are nan in the treated outcome at time steps:', nan_time_steps)
+                treated_future_outcomes['agg'] = np.nan
+                if len(not_all_nan_time_steps) > 0:
+                    #print('The treated outcomes are not nan at time steps:', not_all_nan_time_steps)
+                    treated_future_outcomes.loc[not_all_nan_time_steps, 'agg'] = np.nanmin(treated_outcome_flag[not_all_nan_time_steps], axis = 1)
+            else:
+                treated_future_outcomes['agg'] = np.nanmin(treated_outcome_flag, axis = 1)
         else:  # No treatment is applied
             common_treatment_range = treatment_ranges[0]
             treated_future_outcomes['agg'] = treated_future_outcomes.iloc[:, 0]  # Taking untreated outcomes

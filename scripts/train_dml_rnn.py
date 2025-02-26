@@ -28,6 +28,7 @@ def main(args: DictConfig):
     seed_everything(args.exp.seed)
     #instantiate dataset pipeline
     data_pipeline = instantiate(args.dataset, _recursive_=True)
+    data_pipeline.insert_necessary_args_dml_rnn(args)
     external_val_res_Y, external_val_res_T_disc, external_val_res_T_cont = list(), list(), list()
     disc_dim, cont_dim = args.dataset.n_treatments_disc, args.dataset.n_treatments_cont
     if args.exp.use_regression_residual == False:
@@ -94,12 +95,13 @@ def main(args: DictConfig):
             logger.info(f"fold{fold_idx}: Begin residual inference using trained nuisance network")
             predictions = trainer.predict(nuisance_rnn, val_loader)
             fold_res_Y_val = torch.cat([p[0] for p in predictions], dim=0)
-            fold_res_T_val_disc = torch.cat([p[1][:, :, :, :, :disc_dim] for p in predictions], dim=0) if disc_dim > 0 else None
-            fold_res_T_val_cont = torch.cat([p[1][:, :, :, :, disc_dim:] for p in predictions], dim=0) if cont_dim > 0 else None
+            fold_res_T_val = torch.cat([p[1] for p in predictions], dim=0)
+            fold_res_T_val_disc = fold_res_T_val[:, :, :, :, :disc_dim] if disc_dim > 0 else None
+            fold_res_T_val_cont = fold_res_T_val[:, :, :, :, disc_dim:] if cont_dim > 0 else None
             logger.info(f"add fold{fold_idx} residuals to full dataset")
             data_pipeline.add_fold_residual_data(fold_idx, fold_res_Y_val, fold_res_T_val_disc, fold_res_T_val_cont)
             if args.exp.plot_residual:
-                plot_residual_distribution(mlf_logger_fold, fold_res_Y_val, fold_res_T_val_cont, args)
+                plot_residual_distribution(mlf_logger_fold, fold_res_Y_val, torch.cat([p[1] for p in predictions], dim=0), args)
             
             #evalute residual on the external validation set (not the internal val set from the folds)
             logger.info(f"fold{fold_idx}: Evaluate nuisance network on external validation set")
@@ -161,7 +163,8 @@ def main(args: DictConfig):
         gradient_clip_val=args.exp.get('gradient_clip_val', 0.0),
         log_every_n_steps=args.exp.get('log_every_n_steps', 50),
     )
-    de_est.log_true_effect_moment_norm(val_loader, mlf_logger_de)
+    if data_pipeline.gt_dynamic_effect_available:
+        de_est.log_true_effect_moment_norm(val_loader, mlf_logger_de)
     trainer_de.validate(de_est, dataloaders=val_loader)
     trainer_de.fit(de_est, train_loader, val_loader)
 
@@ -176,11 +179,17 @@ def main(args: DictConfig):
 
     #When individual true dynamic effect is available, log the mse / plot distribution
     if data_pipeline.gt_dynamic_effect_available:
-        individual_true_effect = data_pipeline.compute_individual_true_dynamic_effects(X = data_pipeline.test_data.X_dynamic)
-        if (len(args.dataset.hetero_inds) == 0) or (args.dataset.hetero_inds == None): #Only for Non-hetero estimation
-            plot_de_est_distribution(mlf_logger_de, predicted_de, data_pipeline.true_effect, args)
-        else:
-            plot_de_est_diff_distribution(mlf_logger_de, predicted_de, individual_true_effect, args)
+        if data_pipeline.name == 'linear_markovian_heterodynamic':
+            individual_true_effect = data_pipeline.compute_individual_true_dynamic_effects(X = data_pipeline.test_data.X_dynamic)
+            if (len(args.dataset.hetero_inds) == 0) or (args.dataset.hetero_inds == None): #Only for Non-hetero estimation
+                plot_de_est_distribution(mlf_logger_de, predicted_de, data_pipeline.true_effect, args)
+            else:
+                plot_de_est_diff_distribution(mlf_logger_de, predicted_de, individual_true_effect, args)
+        elif data_pipeline.name == 'MIMIC-III Semi-Synthetic Data Pipeline':
+            if data_pipeline.true_effect is not None:
+                plot_de_est_distribution(mlf_logger_de, predicted_de, data_pipeline.true_effect, args)
+            else:
+                raise NotImplementedError("individual true effect is not available for MIMIC-III Semi-Synthetic Data Pipeline")
     
     logger.info("Evaluate individual treatment effect")
     T_intv_disc, T_base_disc = (np.ones((args.dataset.n_periods, disc_dim)), np.zeros((args.dataset.n_periods, disc_dim))) \
@@ -192,7 +201,9 @@ def main(args: DictConfig):
 
     predicted_te = de_est.predict_treatment_effect(predicted_de, T_intv_disc, T_intv_cont, T_base_disc, T_base_cont)
     gt_te = data_pipeline.compute_treatment_effect('test', T_intv_disc, T_intv_cont, T_base_disc, T_base_cont)
-    mse = ((gt_te - predicted_te) ** 2).mean()
+    #Compute mse in entries where bother predicted_te and gt_te are not nan (both numpy arrays)
+    mask =(~np.isnan(predicted_te)) & (~np.isnan(gt_te))
+    mse = ((predicted_te[mask] - gt_te[mask]) ** 2).mean()
     mlf_logger_de.log_metrics({"TE_mean":mse})
     
 if __name__ == "__main__":
