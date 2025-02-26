@@ -151,7 +151,7 @@ def main(args: DictConfig):
     de_callbacks = []
     de_callbacks.append(checkpoint_callback)
     de_callbacks += [LearningRateMonitor(logging_interval='epoch')]
-    de_est = DynamicEffect_estimator(args, data_pipeline.true_effect)
+    de_est = DynamicEffect_estimator(args, data_pipeline)
     trainer_de = Trainer(
         max_epochs=args.exp.max_epochs_de,
         callbacks=de_callbacks,

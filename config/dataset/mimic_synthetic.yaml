@@ -14,6 +14,7 @@ dataset:
     val: 0.15
     test: 0.15                                  # Batch size for evaluation
   parallel: True
+  te_model: 'sum'
 
   autoregressive: True
 
@@ -130,7 +131,7 @@ dataset:
     - t2
 
 exp:
-  exp_name: 'mimic-two-step-_sum_nonhetero'
+  exp_name: 'mimic-two-step-_sum_nonhetero-new'
   batch_size: 32
   num_workers: 1
   plot_residual: True

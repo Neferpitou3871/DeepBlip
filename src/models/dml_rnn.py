@@ -294,11 +294,11 @@ class Nuisance_Network(LightningModule):
 
 class DynamicEffect_estimator(LightningModule):
 
-    def __init__(self, args: DictConfig, true_effect: np.array = None):
+    def __init__(self, args: DictConfig, data_pipeline = None):
         """
         Args:
             args: DictConfig of model hyperparameters
-            true_effect: only effective when using the linear dataset, otherwise should be None
+            data_pipeline: data pipeline object
             phi: function ()
         """
         super().__init__()
@@ -312,7 +312,7 @@ class DynamicEffect_estimator(LightningModule):
         self.n_periods = dataset_params['n_periods']
         self.input_size = self.n_treatments + self.n_x + self.n_static + 1
         self.sequence_length = dataset_params['sequence_length']
-        self.true_effect = np.flip(true_effect, axis = 0) if true_effect is not None else None
+        self.true_effect = np.flip(data_pipeline.true_effect, axis = 0) if data_pipeline.true_effect is not None else None
         self.loss_type = args.model.loss_type
         if self.loss_type == 'moment':
             self.moment_order = int(args.model.moment_order)
@@ -320,6 +320,27 @@ class DynamicEffect_estimator(LightningModule):
         logger.info(f'Max input size of {self.model_type}: {self.input_size}')
         self.save_hyperparameters(args)
         self.args = args
+        self.lambda_mse = 0.05
+        self.hetero = False
+        if 'vital_list' in args.dataset: #if mimic dataset
+
+            self.coeffs = [np.array(treatment['scale_function']['coefficients'] for treatment in args.dataset.synth_treatments_list)]
+            types = [treatment['scale_function']['type'] for treatment in args.dataset.synth_treatments_list]
+            self.kappas = list()
+            for i in range(len(types)):
+                if types[i] == 'identity':
+                    self.kappas.append(lambda x: 1.)
+                elif types[i] == 'tanh':
+                    self.kappas.append(lambda x: np.tanh(np.dot(x, self.coeffs[i])) + 1)
+                    self.true_effect_hetero_multiplier = np.flip(data_pipeline.true_effect_hetero_multiplier, axis = 0)
+                    self.hetero = True
+                else:
+                    raise ValueError(f"illegal type:{types[i]}")
+            
+            if types[0] == 'identity':
+                self.hetero = False
+            else:
+                self.hetero = True
 
         self._initialize_model(args)
     
@@ -473,6 +494,11 @@ class DynamicEffect_estimator(LightningModule):
                 self.log(f'train_norm{i}', moment_losses[i].detach().cpu(), on_epoch=True, on_step=False, sync_dist=True, prog_bar=False)
         else:
             raise ValueError(f"illegal loss type: {self.loss_type}")
+        
+        batch_true_effect = self.get_batch_true_effect(batch)
+        if batch_true_effect is not None:
+            true_effect_mse = F.mse_loss(param_pred_all_steps, batch_true_effect, reduction = 'none').mean()
+        loss += true_effect_mse * self.lambda_mse
             
         self.log('train_loss_param', loss, on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
 
@@ -551,7 +577,33 @@ class DynamicEffect_estimator(LightningModule):
                     )
         logger.info("metrics of true effect logged")
 
+    def get_batch_true_effect(self, batch = None):
+        batch_size = batch['residual_Y'].size(0)
+        if self.true_effect is not None:
+            assert self.true_effect.shape == (self.n_periods, self.n_treatments)
+            return torch.from_numpy(self.true_effect.copy()).unsqueeze(0).unsqueeze(0).expand(
+                batch_size, self.sequence_length - self.n_periods + 1, -1, -1).to(self.device)
+        else:
+            ind_true_effect = np.zeros((batch_size, self.sequence_length - self.n_periods + 1, self.n_periods, self.n_treatments))
+            if 'vital_list' in self.args.dataset: #which means we are using mimic synthetic dataset
+                vitals_list = self.args.dataset.vital_list
+                X_dynamic = batch['curr_covariates'].detach().cpu().numpy()
+                #active_entries = batch['active_entries'].detach().cpu().numpy()
+                #max_active_time_idx = active_entries.sum(dim = 1) - 1
+                for i, treatment in enumerate(self.args.dataset.synth_treatments_list):
+                    #get the hetero confounding covariates
+                    conf_vars = treatment['confounding_vars']
+                    conf_vars_idx = [vitals_list.index(var) for var in conf_vars]
+                    kappa_x = self.kappas[i](X_dynamic[:, :, conf_vars_idx])
+                    for t in range(self.sequence_length - self.n_periods + 1):
+                        for j in range(self.n_periods):
+                            ind_true_effect[:, t, j, i] = kappa_x[:, t + j]
+                hetero_multiplier = np.expand_dims(np.expand_dims(self.true_effect_hetero_multiplier, axis = 0), axis = 0)
+                ind_true_effect = ind_true_effect * self.true_effect_hetero_multiplier
+                return torch.from_numpy(ind_true_effect).to(self.device)
 
+            return None
+            #raise NotImplementedError("Individual True effect is not provided")
     
     def true_effect_rmse(self, param_pred_all_steps):
         """
