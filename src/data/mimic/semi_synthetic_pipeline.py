@@ -60,20 +60,19 @@ class MIMICSemiSyntheticDataPipeline(BaseDatasetPipeline):
         self.name = 'MIMIC-III Semi-Synthetic Data Pipeline'
         self.gt_dynamic_effect_available = True
         self.betas = np.array([treat.full_effect for treat in self.synthetic_treatments])
-        if self.synthetic_treatments[0].scale_function['type'] == 'tanh':
+        scale_function_types = [treatment.scale_function['type'] for treatment in self.synthetic_treatments]
+        if all([t == 'identity' for t in scale_function_types]) == False:
             logger.info("Creating hetero true dynamic effects")
             self.true_effect_hetero_multiplier = np.stack(
                 [self.betas / (i + 1)**0.5 for i in range(n_periods)], axis = 0
             )
             self.true_effect = None
-        elif self.synthetic_treatments[0].scale_function['type'] == 'identity':
+        else:
             logger.info("Creating homogenous true dynamic effects")
             self.true_effect = np.stack(
                 [self.betas / (i + 1)**0.5 for i in range(n_periods)], axis = 0
             )
             self.true_effect_hetero_multiplier = None
-        else:
-            raise ValueError(f"Unknown scale function type: {self.synthetic_treatments[0].scale_function['type']}")
 
         self.te_model = te_model
 

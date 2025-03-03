@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader, random_split
 from pytorch_lightning.utilities import rank_zero_only
 from copy import deepcopy
 from typing import List
+import numpy as np
 
 def log_params_from_omegaconf_dict(params):
     for param_name, element in params.items():
@@ -81,3 +82,31 @@ def create_loaders_with_indices(full_dataset, train_val_split, batch_size, num_w
     )
 
     return train_loader, val_loader, train_indices, val_indices
+
+def compute_gt_individual_dynamic_effects(args:DictConfig, data_pipeline, subset = 'test'):
+
+    patient_idxs = data_pipeline.index[subset]
+    X_dynamic = data_pipeline.vitals_np[patient_idxs]
+    #multiplier = np.flip(data_pipeline.true_effect_hetero_multiplier, axis = 0)
+    multiplier = data_pipeline.true_effect_hetero_multiplier
+    coeffs = [np.array(treatment['scale_function']['coefficients']) for treatment in args.dataset.synth_treatments_list]
+    types = [treatment['scale_function']['type'] for treatment in args.dataset.synth_treatments_list]
+    kappas = []
+    for i in range(len(types)):
+        if types[i] == 'identity':
+            kappas.append(lambda x: np.ones(x.shape[:-1]))
+        elif types[i] == 'tanh':
+            kappas.append((lambda x: np.tanh(np.dot(x, coeffs[i])) + 1))
+    #max_active_index = data_pipeline.active_entries[patient_idxs, :].sum(axis = 1)
+    ind_true_effect = np.zeros((len(patient_idxs), data_pipeline.sequence_length - data_pipeline.n_periods + 1, 
+                                data_pipeline.n_periods, data_pipeline.n_treatments))
+    for i, treatment in enumerate(data_pipeline.synthetic_treatments):
+        conf_vars = treatment.confounding_vars
+        conf_vars_idx = [data_pipeline.vital_cols.index(var) for var in conf_vars]
+        kappa_x = kappas[i](X_dynamic[:, :, conf_vars_idx])
+        for t in range(data_pipeline.sequence_length - data_pipeline.n_periods + 1):
+            for p in range(data_pipeline.n_periods):
+                ind_true_effect[:, t, p, i] = kappa_x[:, t + p]
+    expanded_multiplier = np.expand_dims(np.expand_dims(multiplier, axis = 0), axis = 0)
+    ind_true_effect = ind_true_effect * expanded_multiplier
+    return ind_true_effect

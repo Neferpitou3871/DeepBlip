@@ -86,7 +86,7 @@ dataset:
         gamma: 0.01
         scale: 30.0
       scale_function:
-        type: 'identity'           # 'tanh' or 'identity'
+        type: 'tanh'           # 'tanh' or 'identity'
         coefficients: #Needs to align with the number of confounding variables
           - 0.5
           - 0.5
@@ -112,7 +112,7 @@ dataset:
         gamma: 0.01
         scale: 30.0
       scale_function:
-        type: 'identity'        # 'tanh' or 'identity'
+        type: 'tanh'        # 'tanh' or 'identity'
         coefficients: #Needs to align with the number of confounding variables
           - 0.5
           - 0.5
@@ -131,7 +131,7 @@ dataset:
     - t2
 
 exp:
-  exp_name: 'mimic-two-step-_sum_nonhetero-new'
+  exp_name: '3.3-mimic-two-step-_sum_hetero-new_lambda0.5'
   batch_size: 32
   num_workers: 1
   plot_residual: True

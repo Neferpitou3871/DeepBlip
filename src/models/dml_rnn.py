@@ -320,16 +320,16 @@ class DynamicEffect_estimator(LightningModule):
         logger.info(f'Max input size of {self.model_type}: {self.input_size}')
         self.save_hyperparameters(args)
         self.args = args
-        self.lambda_mse = 0.05
+        self.lambda_mse = 0.5
         self.hetero = False
         if 'vital_list' in args.dataset: #if mimic dataset
 
-            self.coeffs = [np.array(treatment['scale_function']['coefficients'] for treatment in args.dataset.synth_treatments_list)]
+            self.coeffs = [np.array(treatment['scale_function']['coefficients']) for treatment in args.dataset.synth_treatments_list]
             types = [treatment['scale_function']['type'] for treatment in args.dataset.synth_treatments_list]
             self.kappas = list()
             for i in range(len(types)):
                 if types[i] == 'identity':
-                    self.kappas.append(lambda x: 1.)
+                    self.kappas.append(lambda x: np.ones(x.shape[:-1]))
                 elif types[i] == 'tanh':
                     self.kappas.append(lambda x: np.tanh(np.dot(x, self.coeffs[i])) + 1)
                     self.true_effect_hetero_multiplier = np.flip(data_pipeline.true_effect_hetero_multiplier, axis = 0)
@@ -497,7 +497,10 @@ class DynamicEffect_estimator(LightningModule):
         
         batch_true_effect = self.get_batch_true_effect(batch)
         if batch_true_effect is not None:
-            true_effect_mse = F.mse_loss(param_pred_all_steps, batch_true_effect, reduction = 'none').mean()
+            true_effect_mse = F.mse_loss(param_pred_all_steps, batch_true_effect, reduction = 'none')
+            active_entries = batch['active_entries'][:, self.n_periods - 1:].unsqueeze(-1).unsqueeze(-1).expand(
+                                                        -1, -1, self.n_periods, self.n_treatments)
+            true_effect_mse = (true_effect_mse * active_entries).mean()
         loss += true_effect_mse * self.lambda_mse
             
         self.log('train_loss_param', loss, on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
@@ -547,7 +550,7 @@ class DynamicEffect_estimator(LightningModule):
 
         result = list()
         K = self.sequence_length - self.n_periods + 1
-        true_effect = torch.from_numpy(self.true_effect.copy()).unsqueeze(0).unsqueeze(0)
+        #true_effect = torch.from_numpy(self.true_effect.copy()).unsqueeze(0).unsqueeze(0)
         with torch.no_grad():
             for batch_idx, batch in enumerate(dataloader):
                 res_Y_all_steps = batch['residual_Y']
@@ -557,8 +560,8 @@ class DynamicEffect_estimator(LightningModule):
                 res_T_cont_all_steps = batch['residual_T_cont'] if self.n_treatments_cont > 0 \
                                             else torch.zeros(batch_size, t_len, self.n_periods, self.n_periods, 0)
                 res_T_all_steps = torch.cat([res_T_disc_all_steps, res_T_cont_all_steps], dim = -1)
-                true_effect_expanded = true_effect.expand(res_Y_all_steps.shape[0], K, self.n_periods, self.n_treatments)
-                moment_losses = self.moment_loss(true_effect_expanded, None, res_Y_all_steps, res_T_all_steps)
+                true_dynamic_effect = self.get_batch_true_effect(batch)
+                moment_losses = self.moment_loss(true_dynamic_effect, None, res_Y_all_steps, res_T_all_steps)
                 result.append(moment_losses)
         loss = torch.stack(result).mean(dim = 0)
         return loss
@@ -589,7 +592,6 @@ class DynamicEffect_estimator(LightningModule):
                 vitals_list = self.args.dataset.vital_list
                 X_dynamic = batch['curr_covariates'].detach().cpu().numpy()
                 #active_entries = batch['active_entries'].detach().cpu().numpy()
-                #max_active_time_idx = active_entries.sum(dim = 1) - 1
                 for i, treatment in enumerate(self.args.dataset.synth_treatments_list):
                     #get the hetero confounding covariates
                     conf_vars = treatment['confounding_vars']
@@ -599,10 +601,9 @@ class DynamicEffect_estimator(LightningModule):
                         for j in range(self.n_periods):
                             ind_true_effect[:, t, j, i] = kappa_x[:, t + j]
                 hetero_multiplier = np.expand_dims(np.expand_dims(self.true_effect_hetero_multiplier, axis = 0), axis = 0)
-                ind_true_effect = ind_true_effect * self.true_effect_hetero_multiplier
+                ind_true_effect = ind_true_effect * hetero_multiplier
                 return torch.from_numpy(ind_true_effect).to(self.device)
 
-            return None
             #raise NotImplementedError("Individual True effect is not provided")
     
     def true_effect_rmse(self, param_pred_all_steps):

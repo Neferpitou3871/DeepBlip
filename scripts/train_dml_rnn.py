@@ -12,7 +12,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from src.utils import FilteringMlFlowLogger
 from src.models.dml_rnn import Nuisance_Network, DynamicEffect_estimator
 from src.models.utils import evaluate_nuisance_mse, plot_residual_distribution, plot_de_est_distribution, transform_residual_data, plot_de_est_diff_distribution
-from src.utils import log_params_from_omegaconf_dict, create_loaders_with_indices
+from src.utils import compute_gt_individual_dynamic_effects
 import pickle
 import numpy as np
 from sklearn.model_selection import KFold
@@ -188,6 +188,10 @@ def main(args: DictConfig):
         elif data_pipeline.name == 'MIMIC-III Semi-Synthetic Data Pipeline':
             if data_pipeline.true_effect is not None:
                 plot_de_est_distribution(mlf_logger_de, predicted_de, data_pipeline.true_effect, args)
+            elif data_pipeline.true_effect_hetero_multiplier is not None:
+                logger.info("Plotting distribution of difference between dynamic effect estimates and ground truth values")
+                ind_true_effect = compute_gt_individual_dynamic_effects(args, data_pipeline, subset = 'test')
+                plot_de_est_diff_distribution(mlf_logger_de, predicted_de, ind_true_effect, args)
             else:
                 raise NotImplementedError("individual true effect is not available for MIMIC-III Semi-Synthetic Data Pipeline")
     

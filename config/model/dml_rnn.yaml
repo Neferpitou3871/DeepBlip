@@ -26,7 +26,7 @@ model:
 exp:
   kfold: 2
   max_epochs_nuisance: 15                   # Number of epochs
-  max_epochs_de: 15
+  max_epochs_de: 6
   fit_dml: False
   plot_residual: True
   load_pretrained: False                     #load pretrained model for nuiisance network

@@ -117,7 +117,7 @@ def plot_de_est_distribution(mlf_logger, param_pred, true_effect, args):
             ax.axvline(true_val, color='red', linestyle='--', linewidth=2,
                        label=f"GT = {true_val:.2f}")
 
-            ax.set_title(f"Dynamic_effect est for period={i}, tidx={t}")
+            ax.set_title(f"period={i}, treatment ={t}")
             ax.legend(loc="best")
     
     if mlf_logger is not None:
@@ -139,7 +139,7 @@ def plot_de_est_diff_distribution(mlf_logger, param_pred, individual_true_effect
     param_pred_np = param_pred.detach().cpu().numpy()
     te_diff = param_pred_np - individual_true_effect
     m = args.dataset.n_periods
-    n_t = args.dataset.n_treatments
+    n_t = individual_true_effect.shape[-1]
     fig, axes = plt.subplots(nrows=m, ncols=n_t, figsize=(4 * n_t, 3 * m), sharex=False, sharey=False)
     if m == 1 and n_t == 1:
         axes = np.array([[axes]])
@@ -151,9 +151,11 @@ def plot_de_est_diff_distribution(mlf_logger, param_pred, individual_true_effect
         for t in range(n_t):
             ax = axes[i, t]
             # Distribution (histogram) of predictions for row i, time t
-            ax.hist(te_diff[:, :, i, t].flatten(), bins=100, alpha=0.7, color='blue')
-            ax.set_title(f"Dynamic_effect error for period={i}, tidx={t}")
+            ax.hist(te_diff[:, :, i, t].flatten(), bins=100, alpha=0.6, color='blue')
+            ax.set_title(f"period={i}, treatment={t}")
             ax.legend(loc="best")
+    fig.suptitle("Distribution of the difference between estimated and \n ground truth dynamic effect for each individual")
+    #plt.show()
     if mlf_logger is not None:
         mlflow.set_tracking_uri(args.exp.mlflow_uri)
         with mlflow.start_run(run_id=mlf_logger.run_id, nested=True):
