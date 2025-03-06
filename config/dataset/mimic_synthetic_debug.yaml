@@ -131,7 +131,7 @@ dataset:
     - t2
 
 exp:
-  exp_name: 'mimic-debug-ind_de-3.3'
+  exp_name: '3.6-mimic-debug-ha-rnn'
   batch_size: 2
   num_workers: 1
   plot_residual: True

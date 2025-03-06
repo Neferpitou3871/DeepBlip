@@ -11,34 +11,12 @@ import logging
 import mlflow
 
 from src.models.utils_lstm import VariationalLSTM
+from src.models.basic_blocks import OutcomeHead
 from src.models.utils import build_phi
 
 logger = logging.getLogger(__name__)
 #ray_constants.FUNCTION_SIZE_ERROR_THRESHOLD = 10**8  # ~ 100Mb
 
-class OutcomeHead(nn.Module):
-    def __init__(self, hidden_size, fc_hidden_size, dim_outcome=1, dim_outcome_disc=0):
-        super().__init__()
-        self.dim_outcome = dim_outcome
-        self.dim_outcome_disc = dim_outcome_disc
-        self.dim_outcome_cont = dim_outcome - dim_outcome_disc
-        self.linear1 = nn.Linear(hidden_size, fc_hidden_size)
-        self.elu = nn.ELU()
-        self.linear2 = nn.Linear(fc_hidden_size, dim_outcome)
-        self.trainable_params = ['linear1', 'linear2']
-    
-    def build_outcome(self, hr):
-        """
-        hr: hidden representation of patient state, shape (b, hr_size)
-        returns: outcome, shape (b, dim_outcome)
-        """
-        x = self.elu(self.linear1(hr))
-        outcome = self.linear2(x)
-        #first dim_outcome_disc elements need to be transformed to [0, 1] through sigmoid function
-        if self.dim_outcome_disc > 0:
-            prob = torch.sigmoid(outcome[:, :self.dim_outcome_disc])
-            outcome = torch.concat([prob, outcome[:, self.dim_outcome_disc:]], dim = -1)
-        return outcome
 
 class Nuisance_Network(LightningModule):
 

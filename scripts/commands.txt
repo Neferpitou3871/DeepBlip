@@ -7,3 +7,4 @@ python scripts/train_dml_hetero.py +dataset=synthetic +model=dml_hetero
 python scripts/train_dml.py +dataset=synthetic +model=dml
 
 python scripts/train_dml_rnn.py +dataset=mimic_synthetic_debug +model=dml_rnn
+python scripts/train_ha_rnn.py +dataset=mimic_synthetic_debug +model=ha_rnn
