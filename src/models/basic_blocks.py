@@ -23,3 +23,28 @@ class OutcomeHead(nn.Module):
             prob = torch.sigmoid(outcome[:, :self.dim_outcome_disc])
             outcome = torch.concat([prob, outcome[:, self.dim_outcome_disc:]], dim = -1)
         return outcome
+
+
+class OutcomeHead_GRNN(nn.Module):
+    """Used by G_RNN"""
+
+    def __init__(self, seq_hidden_units, hr_size, fc_hidden_units, dim_treatments, dim_outcome):
+        super().__init__()
+
+        self.seq_hidden_units = seq_hidden_units
+        self.hr_size = hr_size
+        self.fc_hidden_units = fc_hidden_units
+        self.dim_treatments = dim_treatments
+        self.dim_outcome = dim_outcome
+
+        self.linear1 = nn.Linear(self.hr_size + self.dim_treatments,
+                                 self.fc_hidden_units)
+        self.elu = nn.ELU()
+        self.linear2 = nn.Linear(self.fc_hidden_units, self.dim_outcome)
+        self.trainable_params = ['linear1', 'linear2']
+
+    def build_outcome(self, hr, current_treatment):
+        x = torch.cat((hr, current_treatment), dim=-1)
+        x = self.elu(self.linear1(x))
+        outcome = self.linear2(x)
+        return outcome
