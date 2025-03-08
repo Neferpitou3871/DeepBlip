@@ -56,7 +56,7 @@ class PluginHistoryAdjustedNetwork(LightningModule):
         self.hr_output_transformation = nn.Linear(self.hidden_size, self.hr_size)
         self.output_dropout = nn.Dropout(self.dropout_rate)
 
-        self.capo_comp_head = OutcomeHead(self.hr_size + self.n_treatments, self.fc_hidden_size, 1)
+        self.capo_comp_head = OutcomeHead(self.hr_size + self.n_treatments * self.n_periods, self.fc_hidden_size, 1)
     
     def build_hr(self, static_features, curr_covariates, prev_treatments, prev_outputs):
         """
@@ -91,11 +91,15 @@ class PluginHistoryAdjustedNetwork(LightningModule):
 
         hr = self.build_hr(static_features, curr_covariates, prev_treatments, prev_outputs)
         #Concatenate hr with current treatment
-        hr_concat = torch.cat([hr, curr_treatments], dim = -1)
+        #hr_concat = torch.cat([hr, curr_treatments], dim = -1)
 
         capo = torch.zeros((batch_size, L - self.n_periods + 1), device = self.device)
         for t in range(L - self.n_periods + 1):
-            capo[:, t] = self.capo_comp_head.build_outcome(hr_concat[:, t + self.n_periods - 1]).squeeze(-1)
+            concat_tensors = [hr[:, t, :]]
+            for i in range(self.n_periods):
+                concat_tensors.append(curr_treatments[:, t + i, :])
+            hr_concat = torch.concat(concat_tensors, dim = -1)
+            capo[:, t] = self.capo_comp_head.build_outcome(hr_concat).squeeze(-1)
         
         return capo
     
@@ -155,8 +159,58 @@ class PluginHistoryAdjustedNetwork(LightningModule):
                 'monitor': 'val_loss_epoch',
             }
         }
+    
+    def predict_capo(self, dataloader, T_intv_disc:np.ndarray, T_intv_cont:np.ndarray) -> np.ndarray:
+        """
+        Predict the Conditional Average Potential Outcome of the data (in np array)
+        with the given intervention
+        Note: The dataloader shouldn't be shuffled
+        """
+        batch_size = self.args.exp.batch_size
+        SL = self.args.dataset.sequence_length
+        T_intv = self._combine_disc_cont(T_intv_disc, T_intv_cont).reshape(1, self.n_periods * self.n_treatments) # Np array shape (1, m * n_treatments)
+        T_intv_1 = torch.from_numpy(T_intv).float().to(self.device)
+        capo_preds = []
+        self.eval()
+        for i, batch in enumerate(dataloader):
+            #load the data as in forward pass except for the current treatment
+            prev_outputs = batch['prev_outputs']
+            b, L = prev_outputs.size(0), prev_outputs.size(1)
+            prev_treatments_disc = batch['prev_treatments_disc'] if self.n_treatments_disc > 0 else torch.zeros((b, L, 0), device=self.device)
+            prev_treatments_cont = batch['prev_treatments_cont'] if self.n_treatments_cont > 0 else torch.zeros((b, L, 0), device=self.device)
+            prev_treatments = torch.cat([prev_treatments_disc, prev_treatments_cont], dim = -1)
+            static_features = batch['static_features'] if self.n_static > 0 else torch.zeros((b, 0), device=self.device)
+            curr_covariates = batch['curr_covariates']
+            prev_outputs = batch['prev_outputs']
+            batch_size = prev_treatments.size(0)
+
+            T_intv = T_intv_1.expand(batch_size, -1)
+            hr = self.build_hr(static_features, curr_covariates, prev_treatments, prev_outputs)
+            capo = torch.zeros((batch_size, L - self.n_periods + 1), device = self.device)
+            for t in range(L - self.n_periods + 1):
+                hr_concat = torch.cat([hr[:, t, :], T_intv], dim = -1)
+                capo[:, t] = self.capo_comp_head.build_outcome(hr_concat).squeeze(-1)
+            capo_preds.append(capo)
+        capo_pred = torch.cat(capo_preds, dim = 0)
+        return capo_pred.detach().cpu().numpy()
+
+                
+            
+            
 
 
+
+    def _combine_disc_cont(self, T_disc, T_cont):
+        """
+        Combine discrete and continuous treatments
+        """
+        if T_disc is None:
+            return T_cont
+        elif T_cont is None:
+            return T_disc
+        else:
+            assert T_disc.shape[:-1] == T_cont.shape[:-1]
+            return np.concatenate([T_disc, T_cont], axis = -1)
 
 
 
