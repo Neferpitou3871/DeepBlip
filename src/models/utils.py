@@ -235,6 +235,17 @@ def build_phi(option):
     else:
         raise ValueError(f'{option} for phi not implemented')
 
+def combine_disc_cont(T_disc:np.ndarray, T_cont:np.ndarray):
+    """
+    Combine discrete and continuous treatments
+    """
+    if T_disc is None:
+        return T_cont
+    elif T_cont is None:
+        return T_disc
+    else:
+        assert T_disc.shape[:-1] == T_cont.shape[:-1]
+        return np.concatenate([T_disc, T_cont], axis = -1)
 
 
     

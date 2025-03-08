@@ -10,6 +10,7 @@ import numpy as np
 from omegaconf import DictConfig
 import logging
 import mlflow
+from typing import List, Tuple
 
 from src.models.utils_lstm import VariationalLSTM
 from src.models.basic_blocks import OutcomeHead_GRNN
@@ -26,7 +27,7 @@ class PluginGCompNetwork(LightningModule):
     For Plug-in learner, the CATE TE(h_t, a, b) is estimated as \mu_t(h_t, a) - \mu_t(h_t, b).
     Implementation partly based on G-Net https://github.com/konstantinhess/G_transformer
     """
-    def __init__(self, args:DictConfig):
+    def __init__(self, args:DictConfig, treatment_sequence: np.ndarray = None):
         super().__init__()
         self.args = args
         self.model_type = 'plug-in G-comp'
@@ -43,9 +44,11 @@ class PluginGCompNetwork(LightningModule):
         self.projection_horizon = self.n_periods - 1
         self.dim_vitals = self.n_x
         self.dim_treatments = self.n_treatments
+        self.dim_static_features = self.n_static
         self.dim_outcome = 1
         self.has_vitals = True if self.dim_vitals > 0 else False
-        self.treatment_sequence = torch.tensor(args.model.treatment_sequence)[: self.projection_horizon+1, :]
+        self.treatment_sequence = torch.tensor(args.model.treatment_sequence)[: self.projection_horizon+1, :] \
+            if treatment_sequence is None else torch.from_numpy(treatment_sequence).to(self.device)
 
         self.save_hyperparameters(args)
         self._initialize_model(args)
@@ -55,7 +58,7 @@ class PluginGCompNetwork(LightningModule):
         self.hr_size = args.model.hr_size
         self.seq_hidden_units = args.model.hidden_size
         self.fc_hidden_units = args.model.fc_hidden_size
-        self.dropot_rate = args.model.dropout_rate
+        self.dropout_rate = args.model.dropout_rate
         self.num_layer = args.model.num_layer
 
         self.treatments_input_transformation = nn.Linear(self.dim_treatments, self.seq_hidden_units)
@@ -69,12 +72,13 @@ class PluginGCompNetwork(LightningModule):
         self.output_dropout = nn.Dropout(self.dropout_rate)
 
         self.G_comp_heads = nn.ModuleList(
-            [OutcomeHead_GRNN(self.seq_hidden_units, self.hr_size, self.fc_hidden_units, self.dim_treatments, 1)]
+            [OutcomeHead_GRNN(self.seq_hidden_units, self.hr_size, self.fc_hidden_units, self.dim_treatments, 1)
+             for _ in range(self.projection_horizon + 1)]
         )
 
     def build_hr(self, prev_treatments, vitals, prev_outputs, static_features, active_entries):
 
-        x = torch.cat((prev_treatments, prev_outputs), dim=-1)
+        x = torch.cat((prev_treatments, prev_outputs.unsqueeze(-1)), dim=-1)
         x = torch.cat((x, vitals), dim=-1) if self.has_vitals else x
         x = torch.cat((x, static_features.unsqueeze(1).expand(-1, x.size(1), -1)), dim=-1)
         x = self.lstm(x, init_states=None)
@@ -83,7 +87,7 @@ class PluginGCompNetwork(LightningModule):
         hr = nn.ELU()(self.hr_output_transformation(output))
         return hr
     
-    def forward(self, batch):
+    def forward(self, batch, mode = 'test'):
         
         prev_outputs = batch['prev_outputs']
         b, L = prev_outputs.size(0), prev_outputs.size(1)
@@ -95,12 +99,13 @@ class PluginGCompNetwork(LightningModule):
         curr_treatments_disc = batch['curr_treatments_disc'] if self.n_treatments_disc > 0 else torch.zeros((b, L, 0), device=self.device)
         curr_treatments_cont = batch['curr_treatments_cont'] if self.n_treatments_cont > 0 else torch.zeros((b, L, 0), device=self.device)
         curr_treatments = torch.cat([curr_treatments_disc, curr_treatments_cont], dim = -1)
-        active_entries = batch['active_entries']
+        active_entries = batch['active_entries'].clone()
 
         batch_size = prev_treatments.size(0)
         time_dim = prev_treatments.size(1)
 
-        if self.training:
+        #If in training or validation mode
+        if mode == 'train' or mode == 'val' or self.training:
 
             # 1) train all hidden states on factual data
             if self.projection_horizon == 0:
@@ -123,7 +128,7 @@ class PluginGCompNetwork(LightningModule):
                 for t in range(1, time_dim-self.projection_horizon):
                     current_active_entries = batch['active_entries'].clone()
                     current_active_entries[:, int(t + self.projection_horizon):] = 0.0
-                    active_entries_all_steps[:, t-1,:] = current_active_entries[:, t+self.projection_horizon-1,:]
+                    active_entries_all_steps[:, t-1,:] = current_active_entries[:, t+self.projection_horizon-1].unsqueeze(-1)
 
                     # 2b) Generate pseudo outcomes
                     with torch.no_grad():
@@ -139,7 +144,7 @@ class PluginGCompNetwork(LightningModule):
                         for i in range(self.projection_horizon, 0, -1):
                             pseudo_outcome = self.G_comp_heads[i].build_outcome(hr_cf, curr_treatments_cf)[:, t+i-1, :]
                             pseudo_outcomes[:, i-1, :] = pseudo_outcome
-                        pseudo_outcomes[:, -1, :] = batch['outputs'][:, t+self.projection_horizon-1, :]
+                        pseudo_outcomes[:, -1, :] = batch['curr_outputs'][:, t+self.projection_horizon-1].unsqueeze(-1)
                         # Store pseudo outcomes
                         pseudo_outcomes_all_steps[:, t-1, :, :] = pseudo_outcomes
 
@@ -163,7 +168,7 @@ class PluginGCompNetwork(LightningModule):
 
             hr = self.build_hr(prev_treatments, vitals, prev_outputs, static_features, active_entries)
             if self.projection_horizon > 0:
-                pred_outcomes = self.G_comp_heads[0].build_outcome(hr, curr_treatments)
+                pred_outcomes = self.G_comp_heads[0].build_outcome(hr, curr_treatments) # shape (b, SL, 1)
                 index_pred = (torch.arange(0, time_dim, device=self.device) == fixed_split[..., None] - 1)
                 pred_outcomes = pred_outcomes[index_pred]
             else:
@@ -176,7 +181,7 @@ class PluginGCompNetwork(LightningModule):
         for par in self.parameters():
             par.requires_grad = True
 
-        pred_factuals, pred_pseudos, pseudo_outcomes, active_entries_all_steps = self(batch)
+        pred_factuals, pred_pseudos, pseudo_outcomes, active_entries_all_steps = self(batch, mode = 'train')
 
         if self.projection_horizon > 0:
 
@@ -191,7 +196,7 @@ class PluginGCompNetwork(LightningModule):
             loss = mse_gcomp.mean()
 
         else:
-            mse_factual = F.mse_loss(pred_factuals, batch['outputs'], reduction='none')
+            mse_factual = F.mse_loss(pred_factuals, batch['curr_outputs'].unsqueeze(-1), reduction='none')
             mse_factual = (mse_factual * batch['active_entries']).sum() / (batch['active_entries'].sum() * self.dim_outcome)
             loss = mse_factual
 
@@ -201,7 +206,7 @@ class PluginGCompNetwork(LightningModule):
     
     def validation_step(self, batch, batch_ind, optimizer_idx=None):
 
-        pred_factuals, pred_pseudos, pseudo_outcomes, active_entries_all_steps = self(batch)
+        pred_factuals, pred_pseudos, pseudo_outcomes, active_entries_all_steps = self(batch, mode = 'val')
 
         if self.projection_horizon > 0:
 
@@ -216,7 +221,7 @@ class PluginGCompNetwork(LightningModule):
             loss = mse_gcomp.mean()
 
         else:
-            mse_factual = F.mse_loss(pred_factuals, batch['outputs'], reduction='none')
+            mse_factual = F.mse_loss(pred_factuals, batch['curr_outputs'].unsqueeze(-1), reduction='none')
             mse_factual = (mse_factual * batch['active_entries']).sum() / (batch['active_entries'].sum() * self.dim_outcome)
             loss = mse_factual
 
@@ -231,10 +236,42 @@ class PluginGCompNetwork(LightningModule):
         outcome_pred, hr = self(batch)
         return outcome_pred.cpu(), hr.cpu()
     
+    def predict_capo(self, testloader) -> Tuple[np.ndarray]:
+        """
+        Predicts the counterfactual outcomes for the given treatment sequence.
+        """
+        intv = self.treatment_sequence.clone()
+        logger.info(f'Predicting capo for treatment sequence: {intv.cpu().numpy()}')
+        capo_preds = []
+        active_masks = []
+        self.eval()
+        for i, batch in enumerate(testloader):
+            prev_outputs = batch['prev_outputs']
+            b, L = prev_outputs.size(0), prev_outputs.size(1)
+            prev_treatments_disc = batch['prev_treatments_disc'] if self.n_treatments_disc > 0 else torch.zeros((b, L, 0), device=self.device)
+            prev_treatments_cont = batch['prev_treatments_cont'] if self.n_treatments_cont > 0 else torch.zeros((b, L, 0), device=self.device)
+            prev_treatments = torch.cat([prev_treatments_disc, prev_treatments_cont], dim = -1)
+            static_features = batch['static_features'] if self.n_static > 0 else torch.zeros((b, 0), device=self.device)
+            vitals = batch['curr_covariates']
+            active_entries = batch['active_entries'].clone()
+
+            batch_size = prev_treatments.size(0)
+            time_dim = prev_treatments.size(1)
+
+            hr = self.build_hr(prev_treatments, vitals, prev_outputs, static_features, active_entries)
+            assert self.projection_horizon > 0, 'for capo predictions projection horizon should be greater than 0'
+            intv_expanded = intv[0, :].unsqueeze(0).unsqueeze(0).expand(batch_size, time_dim, -1)
+            pred_outcome = self.G_comp_heads[0].build_outcome(hr, intv_expanded).squeeze(-1) # shape (b, SL)
+            capo_preds.append(pred_outcome[:, :time_dim - self.n_periods + 1])
+            active_masks.append(active_entries[:, self.n_periods - 1:].to(bool))
+        capo_pred = torch.cat(capo_preds, dim=0).detach().cpu().numpy()
+        active_mask = torch.cat(active_masks, dim=0).detach().cpu().numpy()
+        return capo_pred, active_mask
+    
     def get_predictions(self, dataset) -> np.array:
         logger.info(f'Predictions for {dataset.subset_name}.')
         # Creating Dataloader
-        data_loader = DataLoader(dataset, batch_size=self.hparams.dataset.val_batch_size, shuffle=False)
+        data_loader = DataLoader(dataset, batch_size=self.args.exp.batch_size, shuffle=False)
         outcome_pred, _ = [torch.cat(arrs) for arrs in zip(*self.trainer.predict(self, data_loader))] # call predict_step(...), which returns predictions and hr
         return outcome_pred.numpy()
     
