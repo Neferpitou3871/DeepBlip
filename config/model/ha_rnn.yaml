@@ -19,8 +19,8 @@ checkpoint:
   monitor: 'val_loss'
 
 exp:
-  exp_name: '3.6-mimic-ha_rnn'
-  max_epochs: 15                   # Number of epochs
+  exp_name: '3.9-mimic-ha_rnn'
+  max_epochs: 12                   # Number of epochs
   batch_size: 32                   # Batch size
   load_pretrained: False           # Load pretrained model
   resume_train: False             # Resume training
