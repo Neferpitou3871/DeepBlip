@@ -20,6 +20,9 @@ import numpy as np
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 torch.set_default_dtype(torch.double)
+OmegaConf.register_new_resolver("times", lambda x, y: x * y, replace = True)
+OmegaConf.register_new_resolver("sum", lambda x, y: x + y, replace = True)
+OmegaConf.register_new_resolver("sub", lambda x, y: x - y, replace = True)
 
 @hydra.main(version_base='1.1', config_name=f'config.yaml', config_path='../config/')
 def main(args: DictConfig):
@@ -38,7 +41,9 @@ def main(args: DictConfig):
     logger.info(f"Interved treatment (discrete and continuous): \n {T_intv_disc} \n {T_intv_cont}")
     logger.info(f"Baseline treatment (discrete and continuous): \n {T_base_disc} \n {T_base_cont}")
 
-    run_names = [f'g-rnn-intv-N={data_pipeline.n_units}', f'g-rnn-base-N={data_pipeline.n_units}']
+    conf_strength = float(args.dataset.synth_treatments_list[0]['conf_outcome_weight'])
+    n_periods = args.dataset.n_periods
+    run_names = [f'g-rnn-intv-conf={conf_strength}_m={n_periods}', f'g-rnn-base-conf={conf_strength}_m={n_periods}']
     capo_pred_dict = dict()
     for i in range(2):
         #G-computation model is trained to predicit capo for a given treatment sequence
@@ -51,6 +56,8 @@ def main(args: DictConfig):
     
         if args.exp.logging:
             experiment_name = args.exp.exp_name
+            mlf_logger = FilteringMlFlowLogger(filter_submodels=[], experiment_name=experiment_name,
+            tracking_uri=args.exp.mlflow_uri, run_name=f"harnn_conf={conf_strength}_m={n_periods}")
             mlf_logger = FilteringMlFlowLogger(filter_submodels=[], experiment_name=experiment_name,
                 tracking_uri=args.exp.mlflow_uri, run_name=run_names[i])
             

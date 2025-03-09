@@ -20,6 +20,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 torch.set_default_dtype(torch.double)
 OmegaConf.register_new_resolver("times", lambda x, y: x * y, replace = True)
+OmegaConf.register_new_resolver("sum", lambda x, y: x + y, replace = True)
+OmegaConf.register_new_resolver("sub", lambda x, y: x - y, replace = True)
 
 @hydra.main(version_base='1.1', config_name=f'config.yaml', config_path='../config/')
 def main(args: DictConfig):

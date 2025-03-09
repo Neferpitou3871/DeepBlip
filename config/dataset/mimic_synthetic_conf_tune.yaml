@@ -96,7 +96,7 @@ dataset:
       window: 3
       conf_outcome_weight:  ${times:${dataset.treatment_weight_multiplier}, 0.2}
       conf_vars_weight: ${times:${dataset.treatment_weight_multiplier}, 0.1}
-      bias: 0.5
+      bias: ${sub:-0.1,${times:${dataset.treatment_weight_multiplier}, 0.2}}
       full_effect: -0.2
       effect_window: 5
       treatment_name: t1
@@ -122,7 +122,7 @@ dataset:
       window: 3
       conf_outcome_weight:  ${times:${dataset.treatment_weight_multiplier}, 0.2}
       conf_vars_weight: ${times:${dataset.treatment_weight_multiplier}, 0.2}
-      bias: -0.5
+      bias: ${sub:-0.5,${times:${dataset.treatment_weight_multiplier}, 0.2}}
       full_effect: -0.4
       effect_window: 4
       treatment_name: t2
