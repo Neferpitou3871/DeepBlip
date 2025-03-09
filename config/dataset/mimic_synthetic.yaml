@@ -131,7 +131,5 @@ dataset:
     - t2
 
 exp:
-  exp_name: '3.6-mimic-two-step-_sum_hetero-new_lambda0.5'
-  batch_size: 32
   num_workers: 1
   plot_residual: True

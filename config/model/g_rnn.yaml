@@ -20,9 +20,9 @@ checkpoint:
   monitor: 'val_loss'
 
 exp:
-  exp_name: '3.8-mimic-g_rnn-debug'
-  max_epochs: 1                   # Number of epochs
-  batch_size: 2                   # Batch size
+  exp_name: '3.9-mimic-g_rnn'
+  max_epochs: 15                   # Number of epochs
+  batch_size: 32                   # Batch size
   load_pretrained: False           # Load pretrained model
   resume_train: False             # Resume training
   run_ids:

@@ -190,7 +190,7 @@ class PluginGCompNetwork(LightningModule):
             mse_gcomp = (mse_gcomp * active_entries_all_steps).sum(dim=(0,1)) / (active_entries_all_steps.sum(dim=(0,1)) * self.dim_outcome)
 
             for i in range(mse_gcomp.shape[0]):
-                self.log(f'val_mse_'+str(i), mse_gcomp[i].mean(),
+                self.log(f'train_mse_'+str(i), mse_gcomp[i].mean(),
                         on_epoch=True, on_step=False, sync_dist=True, prog_bar=False)
 
             loss = mse_gcomp.mean()
