@@ -24,6 +24,7 @@ model:
     gamma: 0.9
 
 exp:
+  exp_name: '3.9-mimic-dml_rnn_conf'
   kfold: 2
   max_epochs_nuisance: 15                   # Number of epochs
   max_epochs_de: 6

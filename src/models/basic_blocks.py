@@ -24,6 +24,39 @@ class OutcomeHead(nn.Module):
             outcome = torch.concat([prob, outcome[:, self.dim_outcome_disc:]], dim = -1)
         return outcome
 
+class PropensityHead(nn.Module):
+    def __init__(self, hidden_size, fc_hidden_size, treatment_type = 'disc'):
+        """
+        treatment_type: 'disc' or 'cont'
+        if treatment_type is 'disc', the output is a sigmoid probability
+        if treatment_type is 'cont', the output is the mean and log-variance of the conditional density function
+        """
+        super().__init__()
+        assert treatment_type in ['disc', 'cont']
+        self.treatment_type = treatment_type
+        self.linear1 = nn.Linear(hidden_size, fc_hidden_size)
+        self.elu = nn.ELU()
+        if treatment_type == 'disc':
+            self.linear2 = nn.Linear(fc_hidden_size, 1)
+        else:
+            self.linear2 = nn.Linear(fc_hidden_size, 2)
+        self.trainable_params = ['linear1', 'linear2']
+    
+    def build_parameter(self, hr):
+        """
+        build parameter of the statistical distribution
+        hr: hidden representation of patient state, shape (b, .., hr_size)
+        returns: propensity, shape (b, .. , 1) or (mu, log_var), where both have shape (b, .., 1)
+        """
+        x = self.elu(self.linear1(hr))
+        propensity = self.linear2(x)
+        if self.treatment_type == 'disc':
+            proba = torch.sigmoid(propensity)
+            return proba
+        else:
+            mu, log_var = torch.split(propensity, 1, dim = -1)
+            log_var = torch.clamp(log_var, -10., 10.)
+            return mu, log_var
 
 class OutcomeHead_GRNN(nn.Module):
     """Used by G_RNN"""

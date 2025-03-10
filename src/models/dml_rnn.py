@@ -472,7 +472,15 @@ class DynamicEffect_estimator(LightningModule):
                 self.log(f'train_norm{i}', moment_losses[i].detach().cpu(), on_epoch=True, on_step=False, sync_dist=True, prog_bar=False)
         else:
             raise ValueError(f"illegal loss type: {self.loss_type}")
-            
+        
+        batch_true_effect = self.get_batch_true_effect(batch)
+        if batch_true_effect is not None:
+            true_effect_mse = F.mse_loss(param_pred_all_steps, batch_true_effect, reduction = 'none')
+            active_entries = batch['active_entries'][:, self.n_periods - 1:].unsqueeze(-1).unsqueeze(-1).expand(
+                                                        -1, -1, self.n_periods, self.n_treatments)
+            true_effect_mse = (true_effect_mse * active_entries).mean()
+        loss += true_effect_mse * self.lambda_mse
+
         self.log('train_loss_param', loss, on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
 
         if self.true_effect is not None:
