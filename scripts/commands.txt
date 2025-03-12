@@ -8,3 +8,7 @@ python scripts/train_dml.py +dataset=synthetic +model=dml
 
 python scripts/train_dml_rnn.py +dataset=mimic_synthetic_debug +model=dml_rnn
 python scripts/train_ha_rnn.py +dataset=mimic_synthetic_debug +model=ha_rnn
+python scripts/train_ipw_rnn.py +dataset=mimic_synthetic_debug +model=ipw_rnn
+
+python scripts/train_dml_rnn.py --multirun +dataset=mimic_synthetic_conf_tune +model=dml_rnn dataset.treatment_weight_multiplier=0.0,0.5,1.0,2.0,3.0,4.0,5.0,6.0,8.0,10.0
+python scripts/train_ipw_rnn.py --multirun +dataset=mimic_synthetic_conf_tune +model=ipw_rnn dataset.treatment_weight_multiplier=0.0,0.5,1.0,2.0,3.0,4.0,5.0,6.0,8.0,10.0

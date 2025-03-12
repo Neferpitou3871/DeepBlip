@@ -38,6 +38,7 @@ def main(args: DictConfig):
     if args.exp.logging:
         experiment_name = args.exp.exp_name
         conf_strength = float(args.dataset.synth_treatments_list[0]['conf_outcome_weight'])
+        #conf_strength = 1.0
         n_periods = args.dataset.n_periods
         mlf_logger_prop = FilteringMlFlowLogger(filter_submodels=[], experiment_name=experiment_name,
             tracking_uri=args.exp.mlflow_uri, run_name=f"prop_conf={conf_strength}_m={n_periods}")
@@ -108,7 +109,7 @@ def main(args: DictConfig):
         callbacks = [LearningRateMonitor(logging_interval='epoch')]
         if args.checkpoint.save:
             checkpoint_callback = ModelCheckpoint(dirpath = artifacts_path,           
-                filename = f"ipw-{names[i]}-{epoch}-{val_loss:.4f}",
+                filename = "ipw-{epoch}-{val_loss:.4f}",
                 monitor = 'val_po_loss', mode = "min", save_top_k = args.checkpoint.top_k, verbose = True                      
             )
             callbacks.append(checkpoint_callback)
@@ -127,10 +128,9 @@ def main(args: DictConfig):
 
         testloader = DataLoader(data_pipeline.test_data, batch_size=args.exp.batch_size, shuffle=False)
         predictions = trainer.predict(ipw_rnn, testloader)
-        capo_pred_dict[names[i]] = torch.cat(predictions, dim = 0).squeeze(-1).detach().cpu().nump()[:, :sequence_length - n_periods + 1]
+        capo_pred_dict[names[i]] = torch.cat(predictions, dim = 0).squeeze(-1).detach().cpu().numpy()[:, :sequence_length - n_periods + 1]
 
     logger.info("Evaluate individual treatment effect")
-
 
     logger.info(f"Interved treatment (discrete and continuous): \n {T_intv_disc} \n {T_intv_cont}")
     logger.info(f"Baseline treatment (discrete and continuous): \n {T_base_disc} \n {T_base_cont}")

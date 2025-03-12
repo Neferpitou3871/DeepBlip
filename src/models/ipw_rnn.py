@@ -18,9 +18,9 @@ class PropensityNetwork(LightningModule):
     """
     Pytorch Lightning Module for Propensity Network with a RNN backbone.
     The model should learn the propsensity scores in a time-varying setting -- 
-    \pi(a_t | h_{t}) := P(A_t = a_t | H_{t}), where H_{t} is the patient history, 
-    h_t = \{x_s\}_{s=1}^{t} \union \{a_s\}_{s=1}^{t-1} \union \{y_s\}_{s=1}^{t-1}.
-    if a_t^i is discrete, we use a sigmoid activation function to ensure that the output is in [0, 1].
+    pi(a_t | h_{t}) := P(A_t = a_t | H_{t}), where H_{t} is the patient history, 
+    h_t = {x_s}_{s=1}^{t} union {a_s}_{s=1}^{t-1} union {y_s}_{s=1}^{t-1}.
+    if a_t^i is discrete, we use a sigmoid activation function to ensure that the output is in [0, 1]
     if a_t^i is continuous, we calculate the conditional density function 's mean and log-variance
     """
     def __init__(self, args:DictConfig):
@@ -54,8 +54,9 @@ class PropensityNetwork(LightningModule):
         self.hr_output_transformation = nn.Linear(self.hidden_size, self.hr_size)
         self.output_dropout = nn.Dropout(self.dropout_rate)
         #propensity head
-        self.propensity_heads = [PropensityHead(self.hr_size, self.fc_hidden_size, self.treatment_types[i]) 
-                                            for i in range(self.n_treatments)]
+        self.propensity_heads = nn.ModuleList([
+            PropensityHead(self.hr_size, self.fc_hidden_size, self.treatment_types[i]) for i in range(self.n_treatments)]
+        )
     
     def build_hr(self, static_features, curr_covariates, prev_treatments, prev_outputs):
         """
@@ -77,7 +78,7 @@ class PropensityNetwork(LightningModule):
         returns:
         propensity_scores: 
         Eval: torch.tensor of shape (b, L, n_t) propensity_disc and propensity_cont concatenated, 
-        \pi(a_t | h_{t}) := P(A_t = a_t | H_{t})
+        pi(a_t | h_{t}) := P(A_t = a_t | H_{t})
         in training mode, returns list of sigmoid probas and (mu, log_var) pairs
         """
         prev_outputs = batch['prev_outputs']
@@ -129,7 +130,7 @@ class PropensityNetwork(LightningModule):
             curr_treatments_disc = batch['curr_treatments_disc']
             sigmoid_output = torch.cat(outcomes[:self.n_treatments_disc], dim = -1)
             assert sigmoid_output.shape == curr_treatments_disc.shape
-            bce_loss = F.binary_cross_entropy(sigmoid_output, curr_treatments_disc).mean(dim = (0, 1))
+            bce_loss = F.binary_cross_entropy(sigmoid_output, curr_treatments_disc, reduction = 'none').mean(dim = (0, 1))
             for i in range(self.n_treatments_disc):
                 self.log(f'train_prop_bce[{i}]', bce_loss[i].item(), on_epoch=True, on_step=False, sync_dist=True, prog_bar=True)
         else:
@@ -147,7 +148,7 @@ class PropensityNetwork(LightningModule):
             nll_loss = torch.zeros(1, device = self.device)
         
         loss = bce_loss.mean() + nll_loss.mean()
-        self.log('train_loss', loss.item(), on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
+        self.log('train_prop_loss', loss.item(), on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
         return loss
     
     def validation_step(self, batch, batch_idx):
@@ -158,7 +159,7 @@ class PropensityNetwork(LightningModule):
             curr_treatments_disc = batch['curr_treatments_disc']
             sigmoid_output = torch.cat(outcomes[:self.n_treatments_disc], dim = -1)
             assert sigmoid_output.shape == curr_treatments_disc.shape
-            bce_loss = F.binary_cross_entropy(sigmoid_output, curr_treatments_disc).mean(dim = (0, 1))
+            bce_loss = F.binary_cross_entropy(sigmoid_output, curr_treatments_disc, reduction = 'none').mean(dim = (0, 1))
             for i in range(self.n_treatments_disc):
                 self.log(f'val_prop_bce[{i}]', bce_loss[i].item(), on_epoch=True, on_step=False, sync_dist=True, prog_bar=True)
         else:
@@ -176,7 +177,7 @@ class PropensityNetwork(LightningModule):
             nll_loss = torch.zeros(1, device = self.device)
         
         loss = bce_loss.mean() + nll_loss.mean()
-        self.log('val_loss', loss.item(), on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
+        self.log('val_prop_loss', loss.item(), on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
         return loss
     
 
@@ -223,9 +224,9 @@ class PropensityNetwork(LightningModule):
 class InversePropensityWeightedNetwork(LightningModule):
     """
     Pytorch Lightning Module for Inverse Propensity Weighted Network with a RNN backbone.
-    The model learns to predict the psuedo-capo of a fixed intervention a = \{a_1, a_2, .., a_m\} computed from the observed outcome 
+    The model learns to predict the psuedo-capo of a fixed intervention a = {a_1, a_2, .., a_m} computed from the observed outcome 
     weighted by the inverse propensity scores computed from PropensityNetwork.
-    Define pseudo-outcome Y_IPW_{t+m-1}^(a) = (\multiply_{l=t}^{t+m-1} \frac{Id(A_l=a_l)}{\pi(a_l | h_l)} ) * Y_{t+m-1}.
+    Define pseudo-outcome Y_IPW_{t+m-1}^(a) = (multiply_{l=t}^{t+m-1} frac{Id(A_l=a_l)}{pi(a_l | h_l)} ) * Y_{t+m-1}.
     And then
     Warn: Should be cautious with the fraction and ensure numerical stability.
     Warn: Ensure pseduo-outcome of intervention and base are computed from non-empty sets
@@ -269,7 +270,7 @@ class InversePropensityWeightedNetwork(LightningModule):
         self.hr_output_transformation = nn.Linear(self.hidden_size, self.hr_size)
         self.output_dropout = nn.Dropout(self.dropout_rate)
 
-        self.outcome_head = OutcomeHead(self.hr_size, self.fc_hidden_size, self.n_treatments, 1)
+        self.outcome_head = OutcomeHead(self.hr_size, self.fc_hidden_size, 1)
 
     def build_hr(self, static_features, curr_covariates, prev_treatments, prev_outputs):
         """
@@ -285,7 +286,7 @@ class InversePropensityWeightedNetwork(LightningModule):
     
     def forward(self, batch):
         """
-        get predicted pseudo-outcome of the given intervention : \hat_Y_IPW_{t+m-1}^(a)
+        get predicted pseudo-outcome of the given intervention : hat_Y_IPW_{t+m-1}^(a)
         Returns:
         pseudo-outcome: torch.tensor of shape (b, L, 1)
         Note: the entries are valid only for 0 <= t < L - m + 1, but we preserve the dimension of time for simplicity
@@ -307,15 +308,15 @@ class InversePropensityWeightedNetwork(LightningModule):
         pseudo_outcome = self.outcome_head.build_outcome(hr)
         return pseudo_outcome
     
-    def predict_step(self, batch):
+    def predict_step(self, batch, batch_idx = None):
         return self(batch)
     
     def get_psuedo_outcome(self, batch):
         """
-        Get the predicted pseudo-outcome of the given intervention : \hat_Y_IPW_{t+m-1}^(a)
+        Get the predicted pseudo-outcome of the given intervention : hat_Y_IPW_{t+m-1}^(a)
         Only select the entries where the pseudo-outcome is valid, which means:
         1. those t+m-1 where A_l = a_l for all l in [t, t + m - 1] (a is treatment_seq with shape (m, n_treatments))
-        2. then Y_pseudo_{t+m-1}^(a) = (\multiply_{l=t}^{t+m-1} \frac{Id(A_l=a_l)}{\pi(a_l | h_l)} ) * Y_{t+m-1}.
+        2. then Y_pseudo_{t+m-1}^(a) = (multiply_{l=t}^{t+m-1} frac{Id(A_l=a_l)}{pi(a_l | h_l)} ) * Y_{t+m-1}.
         returns:
         pseudo_outcome: torch.tensor of shape (b, L - m + 1, 1)  Y_pseudo_{t+m-1}^(a) t = 0, 1, .., L - m
         mask: torch.tensor of shape (b, L, 1) where mask[b, t, 0] = 1 if the entry is valid, 0 otherwise
@@ -333,16 +334,17 @@ class InversePropensityWeightedNetwork(LightningModule):
             propensities = list()
             propensity = self.propensity_network(batch, mode = 'eval')
             for offset in range(m): #offset = l - t
-                target_treatment = self.treatment_seq[offset].unsqueeze(0).unsqueeze(0) #shape (1, 1, n_treatments)
+                target_treatment = self.treatment_seq[offset].unsqueeze(0).unsqueeze(0).to(self.device) #shape (1, 1, n_treatments)
                 #get the mask
                 mask = torch.zeros((b, L, 1), dtype = torch.bool, device=self.device)
-                mask[:, m - 1:, :] = (curr_treatments[:, offset:offset + L - m + 1, :] == target_treatment)
+                mask[:, m - 1:, :] = (curr_treatments[:, offset:offset + L - m + 1, :] == target_treatment).all(dim = -1, keepdim = True)
                 masks.append(mask)
-                propensities.append(propensity[:, offset:offset + L - m + 1, :])
-            #multiply the masks and propensities
+                propensities.append(torch.prod(propensity[:, offset:offset + L - m + 1, :], dim = -1, keepdim = True))
+            #multiply the masks and invser of propensities
             mask = torch.prod(torch.stack(masks, dim = 0), dim = 0)
             prop_prod = torch.prod(torch.stack(propensities, dim = 0), dim = 0)
-            pseudo_outcome = mask[:, m - 1:, :] * prop_prod * true_outcome[:, m - 1:, :]
+            
+            pseudo_outcome = torch.clamp(mask[:, m - 1:, :] / (prop_prod + 1e-4) * true_outcome.unsqueeze(-1)[:, m - 1:, :], -10, 10)
             return pseudo_outcome, mask
     
     def training_step(self, batch, batch_idx):
@@ -358,10 +360,11 @@ class InversePropensityWeightedNetwork(LightningModule):
         active_entries = batch['active_entries']
         mask = mask * active_entries.unsqueeze(-1)
         self.valid_entries += mask.sum().item()
-        if mask.sum() == 0:
-            return 0
         mask = mask.to(torch.bool)
-        mse_loss = F.mse_loss(pred_pseudo_outcome[mask], pseudo_outcome[mask[:, self.n_periods - 1, :]], reduction = 'mean')
+        mse_loss = F.mse_loss(pred_pseudo_outcome[mask], pseudo_outcome[mask[:, self.n_periods - 1:, :]], reduction = 'mean')
+        #Note that mask could be all False, which leads to nan loss, in this case we set the loss to 0
+        if torch.isnan(mse_loss):
+            mse_loss = torch.zeros(1, device=self.device, requires_grad=True)
         self.log('train_po_loss', mse_loss.item(), on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
 
         return mse_loss
@@ -379,10 +382,11 @@ class InversePropensityWeightedNetwork(LightningModule):
         active_entries = batch['active_entries']
         mask = mask * active_entries.unsqueeze(-1)
         self.valid_entries += mask.sum().item()
-        if mask.sum() == 0:
-            return 0
         mask = mask.to(torch.bool)
-        mse_loss = F.mse_loss(pred_pseudo_outcome[mask], pseudo_outcome[mask[:, self.n_periods - 1, :]], reduction = 'mean')
+        mse_loss = F.mse_loss(pred_pseudo_outcome[mask], pseudo_outcome[mask[:, self.n_periods - 1:, :]], reduction = 'mean')
+        #Note that mask could be all False, which leads to nan loss, in this case we set the loss to 0
+        if torch.isnan(mse_loss):
+            mse_loss = torch.zeros(1, device=self.device, requires_grad=True)
         self.log('val_po_loss', mse_loss.item(), on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
 
         return mse_loss
@@ -391,7 +395,7 @@ class InversePropensityWeightedNetwork(LightningModule):
         """
         Log the sum of total valid entries
         """
-        self.log_dict({'valid_entries': self.valid_entries}, on_epoch=True, on_step=False, sync_dist=True, prog_bar=True)
+        self.log('valid_entries',self.valid_entries, on_epoch=True, on_step=False, sync_dist=True, prog_bar=True)
         self.valid_entries = 0
         return
     

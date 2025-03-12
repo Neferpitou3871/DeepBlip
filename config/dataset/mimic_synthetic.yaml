@@ -71,7 +71,7 @@ dataset:
     endo_rand_weight: 0.4
     endo_spline_weight: 2.0
     outcome_name: y1
-
+  treatment_weight_multiplier: -100.
   synth_treatments_list:
     - _target_: src.data.mimic.semi_synthetic_dataset.SyntheticTreatment
       confounding_vars:
