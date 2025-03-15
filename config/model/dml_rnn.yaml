@@ -24,10 +24,10 @@ model:
     gamma: 0.9
 
 exp:
-  exp_name: '3.9-mimic-dml_rnn_conf'
+  exp_name: '3.12-mimic-dml_conf_lambda0.3'
   kfold: 2
-  max_epochs_nuisance: 15                   # Number of epochs
-  max_epochs_de: 6
+  max_epochs_nuisance: 10                   # Number of epochs
+  max_epochs_de: 3
   fit_dml: False
   plot_residual: True
   load_pretrained: False                     #load pretrained model for nuiisance network

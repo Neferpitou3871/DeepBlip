@@ -298,7 +298,7 @@ class DynamicEffect_estimator(LightningModule):
         logger.info(f'Max input size of {self.model_type}: {self.input_size}')
         self.save_hyperparameters(args)
         self.args = args
-        self.lambda_mse = 0.5
+        self.lambda_mse = 0.3
         self.hetero = False
         if 'vital_list' in args.dataset: #if mimic dataset
 

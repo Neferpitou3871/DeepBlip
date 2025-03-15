@@ -20,7 +20,7 @@ checkpoint:
   monitor: 'val_loss'
 
 exp:
-  exp_name: '3.9-mimic-g_rnn_conf'
+  exp_name: '3.12-mimic-g_rnn_conf_min'
   max_epochs: 10                   # Number of epochs
   batch_size: 32                   # Batch size
   load_pretrained: False           # Load pretrained model
