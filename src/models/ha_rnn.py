@@ -110,6 +110,8 @@ class PluginHistoryAdjustedNetwork(LightningModule):
         """
         curr_outputs = batch['curr_outputs']
         active_entries = batch['active_entries']
+        if len(active_entries.shape) == 3:
+            active_entries = active_entries[:, :, 0]
 
         pred_capo = self.forward(batch)
         active_y = active_entries[:, self.n_periods - 1:].to(torch.bool)
@@ -124,6 +126,8 @@ class PluginHistoryAdjustedNetwork(LightningModule):
         """
         curr_outputs = batch['curr_outputs']
         active_entries = batch['active_entries']
+        if len(active_entries.shape) == 3:
+            active_entries = active_entries[:, :, 0]
 
         pred_capo = self.forward(batch)
         active_y = active_entries[:, self.n_periods - 1:].to(torch.bool)

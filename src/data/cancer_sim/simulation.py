@@ -44,11 +44,11 @@ TUMOUR_CELL_DENSITY = 5.8 * 10 ** 8  # cells per cm^3
 TUMOUR_DEATH_THRESHOLD = calc_volume(13)  # assume spherical
 
 # Patient cancer stage. (mu, sigma, lower bound, upper bound) - for lognormal dist
-tumour_size_distributions = {'I': (1.72, 4.70, 0.3, 5.0),
-                             'II': (1.96, 1.63, 0.3, 13.0),
-                             'IIIA': (1.91, 9.40, 0.3, 13.0),
-                             'IIIB': (2.76, 6.87, 0.3, 13.0),
-                             'IV': (3.86, 8.82, 0.3, 13.0)}  # 13.0 is the death condition
+tumour_size_distributions = {'I': (1.72, 4.70 * 0.1, 1.0, 3.0),
+                             'II': (1.96, 1.63* 0.1, 1.0, 3.0),
+                             'IIIA': (1.91, 9.40* 0.1, 1.0, 4.0),
+                             'IIIB': (2.76, 6.87* 0.1, 1.0, 4.0),
+                             'IV': (3.86, 8.82* 0.1, 1.0, 5.0)}  # 13.0 is the death condition
 
 # Observations of stage proportions taken from Detterbeck and Gibson 2008
 # - URL: http://www.jto.org/article/S1556-0864(15)33353-0/fulltext#cesec50\

@@ -2,11 +2,9 @@
 dataset:
   _target_: src.data.cancer_sim.TumorGrowthDatasetPipeline   # Will be dynamically instantiated
   name: tumor_generator
-  conf_coeff: 10.                                            # Confounding coefficient (gamma)
-  chemo_coeff: 10                         # Confounding coefficient of chemotherapy
-  radio_coeff: 10                         # Confounding coefficient of radiotherapy
+  conf_coeff: 0.                                            # Confounding coefficient (gamma)
   seed: 2025
-  n_units: 100
+  n_units: 2000
   n_periods: 3
   window_size: 10                                       # Used for biased treatment assignment
   lag: 0                                                # Lag for treatment assignment window
@@ -22,7 +20,3 @@ dataset:
     test: 0.15
 exp:
   exp_name: 'tumor_debug'
-  max_epochs: 5                   # Number of epochs
-  batch_size: 4                   # Batch size
-  load_pretrained: False           # Load pretrained model
-  resume_train: False             # Resume training

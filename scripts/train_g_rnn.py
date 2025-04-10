@@ -41,7 +41,7 @@ def main(args: DictConfig):
     logger.info(f"Interved treatment (discrete and continuous): \n {T_intv_disc} \n {T_intv_cont}")
     logger.info(f"Baseline treatment (discrete and continuous): \n {T_base_disc} \n {T_base_cont}")
 
-    conf_strength = float(args.dataset.synth_treatments_list[0]['conf_outcome_weight'])
+    conf_strength = float(data_pipeline.get_confounding_strength())
     n_periods = args.dataset.n_periods
     run_names = [f'g-rnn-intv-conf={conf_strength}_m={n_periods}', f'g-rnn-base-conf={conf_strength}_m={n_periods}']
     capo_pred_dict = dict()

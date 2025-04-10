@@ -25,9 +25,7 @@ class TumorGrowthDatasetPipeline(BaseDatasetPipeline):
                  window_size: int,
                  lag: int,
                  lag_y: int,
-                 chemo_coeff: float,
-                 radio_coeff: float,
-                 
+                 conf_coeff: float,
                  **kwargs):
         """
         Initialize the dataset pipeline for linear markovian heterodynamic dataset
@@ -52,8 +50,9 @@ class TumorGrowthDatasetPipeline(BaseDatasetPipeline):
         self.name = 'TumorGrowthDatasetPipeline'
         
         #Step 1: Generate parameters
-        params = generate_params(n_units, chemo_coeff=chemo_coeff, radio_coeff=radio_coeff, window_size=window_size, lag=lag, lag_y = lag_y)
+        params = generate_params(n_units, chemo_coeff=conf_coeff, radio_coeff=conf_coeff, window_size=window_size, lag=lag, lag_y = lag_y)
         params['window_size'] = window_size
+        self.conf_str = conf_coeff
         logger.info("data parameter generation finished")
 
         #Generate observational data
@@ -64,7 +63,8 @@ class TumorGrowthDatasetPipeline(BaseDatasetPipeline):
         self.T_disc = np.concatenate([chemo_application, radio_application], axis = -1)
         self.X_dynamic = np.zeros((n_units, sequence_length, 1))
         patient_type = self.data['patient_types'].astype(int)
-        self.X_static = np.zeros((n_units, max(patient_type)))
+        self.num_types = max(patient_type)
+        self.X_static = np.zeros((n_units, self.num_types))
         self.gt_dynamic_effect_available = True
         self.true_effect = None
         self.beta_c = params['beta_c'].mean()
@@ -172,6 +172,19 @@ class TumorGrowthDatasetPipeline(BaseDatasetPipeline):
     def insert_necessary_args_dml_rnn(self, args):
         """No additional arguments are needed for this dataset"""
         return
+    
+    def insert_necessary_args_dml_rnn(self, args):
+        args.dataset['n_treatments_disc'] = 2
+        args.dataset['n_treatments_cont'] = 0
+        args.dataset['n_treatments'] = 2
+        args.dataset['n_periods'] = self.n_periods
+        args.dataset['sequence_length'] = self.sequence_length
+        args.dataset['n_x'] = 1
+        args.dataset['n_static'] = int(self.num_types)
+        return
+    
+    def get_confounding_strength(self):
+        return self.conf_str
         
 
 if __name__ == '__main__':

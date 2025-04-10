@@ -499,6 +499,8 @@ class MIMICSemiSyntheticDataPipeline(BaseDatasetPipeline):
         args.dataset['n_static'] = self.static_features.shape[1]
         return
 
+    def get_confounding_strength(self):
+            return self.synthetic_treatments[0]['conf_outcome_weight']
 
     
     

@@ -35,7 +35,7 @@ def main(args: DictConfig):
 
     if args.exp.logging:
         experiment_name = args.exp.exp_name
-        conf_strength = float(args.dataset.synth_treatments_list[0]['conf_outcome_weight'])
+        conf_strength = float(data_pipeline.get_confounding_strength())
         n_periods = args.dataset.n_periods
         mlf_logger = FilteringMlFlowLogger(filter_submodels=[], experiment_name=experiment_name,
             tracking_uri=args.exp.mlflow_uri, run_name=f"harnn_conf={conf_strength}_m={n_periods}")

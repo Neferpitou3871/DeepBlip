@@ -19,9 +19,9 @@ checkpoint:
   monitor: 'val_loss'
 
 exp:
-  exp_name: '3.12-mimic-ha_rnn_min'
+  exp_name: '4.9-tumor-ha-rnn'
   max_epochs: 12                   # Number of epochs
-  batch_size: 32                   # Batch size
+  batch_size: 64                   # Batch size
   load_pretrained: False           # Load pretrained model
   resume_train: False             # Resume training
   run_id: 0                       # Run ID of the checkpoint
