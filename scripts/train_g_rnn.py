@@ -125,9 +125,9 @@ def main(args: DictConfig):
     pred_te = capo_pred_dict['intv'] - capo_pred_dict['base']
     #Compute the masked mase between pred and gt
     mask = capo_pred_dict['intv_mask'] & capo_pred_dict['base_mask'] & (~np.isnan(pred_te)) & (~np.isnan(gt_te))
-    mse = np.mean((pred_te[mask] - gt_te[mask])**2)
-    logger.info(f"MSE of individual treatment effect: {mse}")
-    mlf_logger.log_metrics({"TE_mean": mse})
+    te_rmse = np.sqrt(np.mean((gt_te[mask] - pred_te[mask])**2))
+    mlf_logger.log_metrics({'TE_rmse': te_rmse})
+    logger.info(f"Test RMSE: {te_rmse}")
 
 
 if __name__ == "__main__":

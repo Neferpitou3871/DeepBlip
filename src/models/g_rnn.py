@@ -126,7 +126,7 @@ class PluginGCompNetwork(LightningModule):
                 active_entries_all_steps = torch.zeros((batch_size, time_dim-self.projection_horizon-1, 1), device=self.device)
 
                 for t in range(1, time_dim-self.projection_horizon):
-                    current_active_entries = batch['active_entries'].clone()
+                    current_active_entries = batch['active_entries'].clone().squeeze(-1)
                     current_active_entries[:, int(t + self.projection_horizon):] = 0.0
                     active_entries_all_steps[:, t-1,:] = current_active_entries[:, t+self.projection_horizon-1].unsqueeze(-1)
 
@@ -253,7 +253,7 @@ class PluginGCompNetwork(LightningModule):
             prev_treatments = torch.cat([prev_treatments_disc, prev_treatments_cont], dim = -1)
             static_features = batch['static_features'] if self.n_static > 0 else torch.zeros((b, 0), device=self.device)
             vitals = batch['curr_covariates']
-            active_entries = batch['active_entries'].clone()
+            active_entries = batch['active_entries'].clone().squeeze(-1)
 
             batch_size = prev_treatments.size(0)
             time_dim = prev_treatments.size(1)

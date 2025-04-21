@@ -103,9 +103,12 @@ def main(args: DictConfig):
     capo_base = ha_rnn.predict_capo(testloader, T_base_disc, T_base_cont)
     pred_te = capo_intv - capo_base
     mask =(~np.isnan(pred_te)) & (~np.isnan(gt_te))
-    te_mse = np.mean((gt_te[mask] - pred_te[mask])**2)
-    mlf_logger.log_metrics({'TE_mse': te_mse})
-    logger.info(f"Test MSE: {te_mse}")
+    #te_mse = np.mean((gt_te[mask] - pred_te[mask])**2)
+    #mlf_logger.log_metrics({'TE_mse': te_mse})
+    #logger.info(f"Test MSE: {te_mse}")
+    te_rmse = np.sqrt(np.mean((gt_te[mask] - pred_te[mask])**2))
+    mlf_logger.log_metrics({'TE_rmse': te_rmse})
+    logger.info(f"Test RMSE: {te_rmse}")
 
 
 if __name__ == '__main__':

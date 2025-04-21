@@ -1,8 +1,6 @@
 exp:
   seed: 100                         # Random seed for all the initialisations, dataset generation etc.
   accelerator: 'gpu'                         
-  max_epochs_nuisance: 15                  # Number of epochs
-  max_epochs_de: 10
   logging: True                     # Logging to MlFlow
   mlflow_uri: http://127.0.0.1:3333 
   batch_size: 32

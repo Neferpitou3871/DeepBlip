@@ -10,6 +10,7 @@ dataset:
   lag: 0                                                # Lag for treatment assignment window
   sequence_length: 30                                    # Max length of time series
   lag_y: 5
+  normalize: True
   val_batch_size: 32                                   # Batch size for evaluation
   treatment_mode: multiclass                            # multiclass / multilabel -- for RMSN
   treatment_sequence: [[0., 0., 0., 1.],                # treatment sequence to train on. Only works if cf_seq_mode = fixed_treatment

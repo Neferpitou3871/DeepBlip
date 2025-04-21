@@ -26,6 +26,7 @@ class TumorGrowthDatasetPipeline(BaseDatasetPipeline):
                  lag: int,
                  lag_y: int,
                  conf_coeff: float,
+                 normalize: bool = True,
                  **kwargs):
         """
         Initialize the dataset pipeline for linear markovian heterodynamic dataset
@@ -48,7 +49,9 @@ class TumorGrowthDatasetPipeline(BaseDatasetPipeline):
             split=split,
         )
         self.name = 'TumorGrowthDatasetPipeline'
-        
+        #set random seed
+        self.seed = seed
+        np.random.seed(seed)
         #Step 1: Generate parameters
         params = generate_params(n_units, chemo_coeff=conf_coeff, radio_coeff=conf_coeff, window_size=window_size, lag=lag, lag_y = lag_y)
         params['window_size'] = window_size
@@ -81,6 +84,17 @@ class TumorGrowthDatasetPipeline(BaseDatasetPipeline):
         for i in range(n_units):
             L = int(sequence_lengths[i])
             self.active_entries[i, :L, :] = 1
+
+        self.scaling_params = {
+            'cancer_volume':{'mean': 0, 'std': 1}
+        }
+        if normalize:
+            #Normalize the data
+            self.scaling_params['cancer_volume']['mean'] = self.Y.mean()
+            self.scaling_params['cancer_volume']['std'] = self.Y.std()
+            self.Y = (self.Y - self.Y.mean()) / self.Y.std()
+            #self.X_static = (self.X_static - self.X_static.mean(axis=0)) / self.X_static.std(axis=0)
+            #self.X_dynamic = (self.X_dynamic - self.X_dynamic.mean(axis=0)) / self.X_dynamic.std(axis=0)
 
         self._split_data()
 
@@ -145,8 +159,11 @@ class TumorGrowthDatasetPipeline(BaseDatasetPipeline):
         subset_params['beta_c'] = self.params['beta_c'][self.index[subset]]
         subset_params['K'] = self.params['K'][self.index[subset]]
         subset_params['rho'] = self.params['rho'][self.index[subset]]
+        #subset_params['scaling_params'] = self.scaling_params
 
         Y_ctf, active_entries = simulate_counterfactuals_treatment_seq(subset_data, subset_params, self.n_periods, T_seq)
+        #normalize the data
+        Y_ctf = (Y_ctf - self.scaling_params['cancer_volume']['mean']) / self.scaling_params['cancer_volume']['std']
         return Y_ctf
 
     

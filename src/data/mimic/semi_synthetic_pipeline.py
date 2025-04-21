@@ -361,6 +361,10 @@ class MIMICSemiSyntheticDataPipeline(BaseDatasetPipeline):
 
         ctf_outcomes = pd.concat(all_vitals_subset, keys=subset_indices)[f'{intv_name}_{self.synth_outcome.outcome_name}']
         Y_ctf = ctf_outcomes.values.reshape((len(subset_indices), -1))[:, self.n_periods:]
+
+        #normalize the data
+        Y_ctf = (Y_ctf - self.scaling_params['mean'][:, self.n_periods:]) / self.scaling_params['std'][:, self.n_periods:]
+
         return Y_ctf
     
     def treat_patient_counterfactually(self, patient_ix: int, intv_name: str = 'intv', seed: int = None, te_model = 'min'):
@@ -500,7 +504,7 @@ class MIMICSemiSyntheticDataPipeline(BaseDatasetPipeline):
         return
 
     def get_confounding_strength(self):
-            return self.synthetic_treatments[0]['conf_outcome_weight']
+            return self.synthetic_treatments[0].conf_outcome_weight
 
     
     
