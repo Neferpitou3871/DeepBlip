@@ -53,6 +53,9 @@ class ProcessedDataset(Dataset):
 
         self.gt_dynamic_effect_available = False #In some models, the true dynamic effect is available
 
+        self.sw_enc = None
+        self.sw_dec = None
+    
     def __len__(self):
         return self.Y.shape[0]
 
@@ -69,7 +72,9 @@ class ProcessedDataset(Dataset):
             "curr_covariates": self.X_dynamic[idx],       # (S, n_x)
             "residual_Y": self.res_Y[idx] if self.res_Y is not None else torch.zeros(0),
             "residual_T_disc": self.res_T_disc[idx] if self.res_T_disc is not None else torch.zeros(0),
-            "residual_T_cont": self.res_T_cont[idx] if self.res_T_cont is not None else torch.zeros(0)
+            "residual_T_cont": self.res_T_cont[idx] if self.res_T_cont is not None else torch.zeros(0),
+            'sw_enc': self.sw_enc[idx] if self.sw_enc is not None else torch.zeros(0), # (S,)
+            'sw_dec': self.sw_dec[idx] if self.sw_dec is not None else torch.zeros(0) # (S, tau)
         }
     
     def add_residual_data(self, subset_index, res_Y, res_T_disc = None, res_T_cont = None):
@@ -100,6 +105,16 @@ class ProcessedDataset(Dataset):
             if self.res_T_cont is None:
                 self.res_T_cont = torch.zeros(len(self), t_len, n_periods, n_periods, res_T_cont.shape[-1])
             self.res_T_cont[subset_index] = res_T_cont
+        return
+    
+    def add_sw_enc_dec(self, sw_weights: torch.Tensor):
+        """
+        Add stabilized weights to the dataset for the training of encoder/decoder in R-MSN.
+        sw_weights (N, T, tau + 1)  where n_peridos = tau + 1
+        """
+        assert sw_weights.shape[0] == len(self), "The size of the weights should be equal to the size of the dataset."
+        self.sw_enc = sw_weights[:, :, 0]
+        self.sw_dec = sw_weights[:, :, 1:]
         return
 
 

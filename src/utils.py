@@ -110,3 +110,12 @@ def compute_gt_individual_dynamic_effects(args:DictConfig, data_pipeline, subset
     expanded_multiplier = np.expand_dims(np.expand_dims(multiplier, axis = 0), axis = 0)
     ind_true_effect = ind_true_effect * expanded_multiplier
     return ind_true_effect
+
+
+def sample_to_1d(tensor, num_samples):
+    # Flatten the D-dim tensor to 1D
+    flat_tensor = tensor.view(-1)
+    # Generate random indices
+    indices = torch.randperm(flat_tensor.size(0))[:num_samples]
+    # Sample and return 1D tensor
+    return flat_tensor[indices]
