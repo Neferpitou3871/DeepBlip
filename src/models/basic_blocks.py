@@ -81,3 +81,20 @@ class OutcomeHead_GRNN(nn.Module):
         x = self.elu(self.linear1(x))
         outcome = self.linear2(x)
         return outcome
+    
+class OutcomeHead_GNET(nn.Module):
+    def __init__(self, input_size, fc_hidden_size, dim_outcome=1):
+        super().__init__()
+        self.dim_outcome = dim_outcome
+        self.linear1 = nn.Linear(input_size, fc_hidden_size)
+        self.elu = nn.ELU()
+        self.linear2 = nn.Linear(fc_hidden_size, dim_outcome)
+        self.trainable_params = ['linear1', 'linear2']
+    
+    def build_outcome(self, input):
+        """
+        returns: outcome, shape (b, dim_outcome)
+        """
+        x = self.elu(self.linear1(input))
+        outcome = self.linear2(x)
+        return outcome
