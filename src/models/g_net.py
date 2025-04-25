@@ -236,7 +236,7 @@ class GNet(LightningModule):
         self.eval() # Set model to evaluation mode
 
         tau = self.projection_horizon
-        n_mc_samples = self.args.inference.get('mc_samples', 100) # Get MC samples from config, default 100
+        n_mc_samples = self.args.model.get('mc_samples', 100) # Get MC samples from config, default 100
         b = batch['prev_outputs'].size(0)
         L = batch['prev_outputs'].size(1) # Sequence length T
 
@@ -265,7 +265,6 @@ class GNet(LightningModule):
         for t_start in range(L - tau):
             mc_outcomes_at_t_tau = torch.zeros((b, n_mc_samples), device=self.device)
 
-            # --- Loop over Monte Carlo samples ---
             for mc_idx in range(n_mc_samples):
 
                 # --- Initialize LSTM state at t_start by running on observed history ---
@@ -300,7 +299,7 @@ class GNet(LightningModule):
                 for k in range(tau + 1):
                     t_current = t_start + k
 
-                    # --- 1. Calculate hr_{t_current} ---
+                    #  Calculate hr_{t_current} 
                     # LSTM Input: a_{t-1}, Y_{t-1}, X_t, s
                     # Use observed prev_treatment at t_current (a_{t_current-1})
                     lstm_input_k = torch.cat((prev_treatments[:, t_current, :],
@@ -320,19 +319,19 @@ class GNet(LightningModule):
                     # Calculate representation R_t
                     hr_k = nn.ELU()(self.hr_output_transformation(sim_hx_list[-1]))
 
-                    # --- 2. Predict & Sample Outcome Y_{t_current} ---
+                    # Predict & Sample Outcome Y_{t_current} 
                     intervention_k = T_intv[:, k, :] # Use intervention a*_{t_current}
                     outcome_head_input = torch.cat((hr_k, intervention_k), dim=-1)
                     outcome_mean_k = self.outcome_head.build_outcome(outcome_head_input)
                     outcome_noise = torch.randn_like(outcome_mean_k) * outcome_std
                     sim_outcome_k = outcome_mean_k + outcome_noise # Y_{t_current}
 
-                    # --- 3. Store Final Outcome ---
+                    # Store Final Outcome 
                     if k == tau:
                         mc_outcomes_at_t_tau[:, mc_idx] = sim_outcome_k.squeeze(-1) # Store Y_{t_start + tau}
                         break # Exit simulation loop for this MC sample
 
-                    # --- 4. Predict & Sample Vitals X_{t_current+1} ---
+                    # Predict & Sample Vitals X_{t_current+1} 
                     # Prediction uses hr_k (R_{t_current}) and sim_vitals_k (X_{t_current})
                     pred_vitals_means_list = []
                     for vital_idx in range(self.dim_vitals):
@@ -345,14 +344,12 @@ class GNet(LightningModule):
                     vitals_noise = torch.randn_like(vitals_mean_k_plus_1) * vitals_std # Use per-dimension std
                     sim_vitals_k_plus_1 = vitals_mean_k_plus_1 + vitals_noise # X_{t_current+1}
 
-                    # --- 5. Update State for Next Iteration ---
-                    sim_vitals_k = sim_vitals_k_plus_1             # Update vitals for next step
-                    sim_outcome_k_minus_1 = sim_outcome_k.squeeze(-1) # Update outcome for next step's LSTM input
+                    # Update State for Next Iteration
+                    sim_vitals_k = sim_vitals_k_plus_1             
+                    sim_outcome_k_minus_1 = sim_outcome_k.squeeze(-1)
 
-            # --- Average MC Samples for starting time t_start ---
             final_potential_outcomes[:, t_start] = torch.mean(mc_outcomes_at_t_tau, dim=1)
 
-        # self.train() # Set back to train mode if necessary, but usually called for inference
         return final_potential_outcomes
     
     def predict_capo(self, testloader, T_intv_disc:np.ndarray, T_intv_cont:np.ndarray):

@@ -6,6 +6,7 @@ model:
   dropout_rate: 0.1
   fc_hidden_size: 25
   treatment_sequence: [[1, 1], [1, 1], [1, 1]]
+  mc_samples: 100
 
   optimizer:
     optimizer_cls: 'adam'
