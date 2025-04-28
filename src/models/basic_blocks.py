@@ -1,5 +1,7 @@
 import torch
 import torch.nn as nn
+from src.models.utils import grad_reverse
+
 class OutcomeHead(nn.Module):
     def __init__(self, hidden_size, fc_hidden_size, dim_outcome=1, dim_outcome_disc=0):
         super().__init__()
@@ -98,3 +100,54 @@ class OutcomeHead_GNET(nn.Module):
         x = self.elu(self.linear1(input))
         outcome = self.linear2(x)
         return outcome
+    
+
+class BRTreatmentOutcomeHead(nn.Module):
+    """Used by Causal Transformer"""
+
+    def __init__(self, seq_hidden_units, br_size, fc_hidden_units, dim_treatments, dim_outcome, alpha=0.0, update_alpha=True,
+                 balancing='grad_reverse'):
+        super().__init__()
+
+        self.seq_hidden_units = seq_hidden_units
+        self.br_size = br_size
+        self.fc_hidden_units = fc_hidden_units
+        self.dim_treatments = dim_treatments
+        self.dim_outcome = dim_outcome
+        self.alpha = alpha if not update_alpha else 0.0
+        self.alpha_max = alpha
+        self.balancing = balancing
+
+        self.linear1 = nn.Linear(self.seq_hidden_units, self.br_size)
+        self.elu1 = nn.ELU()
+
+        self.linear2 = nn.Linear(self.br_size, self.fc_hidden_units)
+        self.elu2 = nn.ELU()
+        self.linear3 = nn.Linear(self.fc_hidden_units, self.dim_treatments)
+
+        self.linear4 = nn.Linear(self.br_size + self.dim_treatments, self.fc_hidden_units)
+        self.elu3 = nn.ELU()
+        self.linear5 = nn.Linear(self.fc_hidden_units, self.dim_outcome)
+
+        self.treatment_head_params = ['linear2', 'linear3']
+
+    def build_treatment(self, br, detached=False):
+        if detached:
+            br = br.detach()
+
+        if self.balancing == 'grad_reverse':
+            br = grad_reverse(br, self.alpha)
+
+        br = self.elu2(self.linear2(br))
+        treatment = self.linear3(br)  # Softmax is encapsulated into F.cross_entropy()
+        return treatment
+
+    def build_outcome(self, br, current_treatment):
+        x = torch.cat((br, current_treatment), dim=-1)
+        x = self.elu3(self.linear4(x))
+        outcome = self.linear5(x)
+        return outcome
+
+    def build_br(self, seq_output):
+        br = self.elu1(self.linear1(seq_output))
+        return br

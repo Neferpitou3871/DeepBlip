@@ -1,5 +1,6 @@
 from omegaconf import DictConfig
 import numpy as np
+from torch.autograd import Function
 from torch.utils.data import Dataset, random_split
 import matplotlib.pyplot as plt
 import mlflow
@@ -248,5 +249,20 @@ def combine_disc_cont(T_disc:np.ndarray, T_cont:np.ndarray):
         return np.concatenate([T_disc, T_cont], axis = -1)
 
 
-    
+def grad_reverse(x, scale=1.0):
+
+    class ReverseGrad(Function):
+        """
+        Gradient reversal layer
+        """
+
+        @staticmethod
+        def forward(ctx, x):
+            return x
+
+        @staticmethod
+        def backward(ctx, grad_output):
+            return scale * grad_output.neg()
+
+    return ReverseGrad.apply(x)
 

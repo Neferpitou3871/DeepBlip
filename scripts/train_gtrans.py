@@ -88,7 +88,7 @@ def main(args: DictConfig):
                 treatment_seq = combine_disc_cont(T_intv_disc, T_intv_cont)
             else:
                 treatment_seq = combine_disc_cont(T_base_disc, T_base_cont)
-            g_trfm = G_transformer(args, treatment_seq)
+            g_trfm = G_transformer(args, treatment_seq) 
 
         callbacks = []
         if args.checkpoint.save:
