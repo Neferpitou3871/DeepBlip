@@ -16,6 +16,7 @@ multirun/
 #old files / experiments
 scripts/old_train_dml_rnn.pyc
 scripts/old_train_dml.py
+scripts/old_train_dml_rnn.py
 scripts/in_place.py
 scripts/eval_de_dmlrnn.py
 scripts/eval_treatment_effect.py
