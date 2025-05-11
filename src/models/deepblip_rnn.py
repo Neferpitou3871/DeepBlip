@@ -270,7 +270,7 @@ class Nuisance_Network(LightningModule):
     
 
 
-class DynamicEffect_estimator(LightningModule):
+class BlipPrediction_Network(LightningModule):
 
     def __init__(self, args: DictConfig, data_pipeline = None):
         """

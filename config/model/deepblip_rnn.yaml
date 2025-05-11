@@ -24,10 +24,10 @@ model:
     gamma: 0.9
 
 exp:
-  exp_name: '3.12-mimic-dml_conf_lambda0.3'
+  exp_name: '5.11-mimic-deepblip_blip_effects_vis'
   kfold: 2
-  max_epochs_nuisance: 10                   # Number of epochs
-  max_epochs_de: 3
+  max_epochs_nuisance: 1                   # Number of epochs
+  max_epochs_blip: 1
   fit_dml: False
   plot_residual: True
   load_pretrained: False                     #load pretrained model for nuiisance network

@@ -10,8 +10,8 @@ from pytorch_lightning import Trainer
 from pytorch_lightning.utilities.seed import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from src.utils import FilteringMlFlowLogger
-from src.models.dml_rnn import Nuisance_Network, DynamicEffect_estimator
-from src.models.utils import evaluate_nuisance_mse, plot_residual_distribution, plot_de_est_distribution, transform_residual_data, plot_de_est_diff_distribution
+from src.models.deepblip_rnn import Nuisance_Network, BlipPrediction_Network
+from src.models.utils import evaluate_nuisance_mse, plot_residual_distribution, plot_blip_est_distribution, transform_residual_data, plot_blip_est_diff_distribution
 from src.utils import compute_gt_individual_dynamic_effects
 import pickle
 import numpy as np
@@ -142,62 +142,58 @@ def main(args: DictConfig):
         experiment_name = args.exp.exp_name
         conf_strength = float(args.dataset.synth_treatments_list[0]['conf_outcome_weight'])
         n_periods = args.dataset.n_periods
-        mlf_logger_de = FilteringMlFlowLogger(filter_submodels=[],  experiment_name=experiment_name, 
+        mlf_logger_blip = FilteringMlFlowLogger(filter_submodels=[],  experiment_name=experiment_name, 
                                               tracking_uri=args.exp.mlflow_uri, run_name=f'de_conf={conf_strength}_m={n_periods}')
-        artifacts_path_de = hydra.utils.to_absolute_path(
-            mlf_logger_de.experiment.get_run(mlf_logger_de.run_id).info.artifact_uri
+        artifacts_path_blip = hydra.utils.to_absolute_path(
+            mlf_logger_blip.experiment.get_run(mlf_logger_blip.run_id).info.artifact_uri
         ).replace('mlflow-artifacts:', 'mlruns')
-        logger.info(f"Artifacts path: {artifacts_path_de}")
+        logger.info(f"Artifacts path: {artifacts_path_blip}")
     else:
-        mlf_logger_de = None
-        artifacts_path_de = None
+        mlf_logger_blip = None
+        artifacts_path_blip = None
     if args.checkpoint.save:
-        checkpoint_callback = ModelCheckpoint(dirpath = artifacts_path_de, filename = "de-{epoch}-{val_loss:.4f}", monitor = args.checkpoint.monitor_de,
+        checkpoint_callback = ModelCheckpoint(dirpath = artifacts_path_blip, filename = "de-{epoch}-{val_loss:.4f}", monitor = args.checkpoint.monitor_blip,
             mode = "min", save_top_k = args.checkpoint.top_k, verbose = True)
     de_callbacks = []
     de_callbacks.append(checkpoint_callback)
     de_callbacks += [LearningRateMonitor(logging_interval='epoch')]
-    de_est = DynamicEffect_estimator(args, data_pipeline)
-    trainer_de = Trainer(
-        max_epochs=args.exp.max_epochs_de,
+    de_est = BlipPrediction_Network(args, data_pipeline)
+    trainer_blip = Trainer(
+        max_epochs=args.exp.max_epochs_blip,
         callbacks=de_callbacks,
         devices=1,
         accelerator=args.exp.accelerator,
         deterministic=True,
-        logger = mlf_logger_de,
+        logger = mlf_logger_blip,
         detect_anomaly=True,
         gradient_clip_val=args.exp.get('gradient_clip_val', 0.0),
         log_every_n_steps=args.exp.get('log_every_n_steps', 50),
     )
     if data_pipeline.gt_dynamic_effect_available:
-        de_est.log_true_effect_moment_norm(val_loader, mlf_logger_de)
-    trainer_de.validate(de_est, dataloaders=val_loader)
-    trainer_de.fit(de_est, train_loader, val_loader)
+        de_est.log_true_effect_moment_norm(val_loader, mlf_logger_blip)
+    trainer_blip.validate(de_est, dataloaders=val_loader)
+    trainer_blip.fit(de_est, train_loader, val_loader)
 
-    #logger.info(f"load best checkpoint from {checkpoint_callback.best_model_path}")
-    #est_de_est = DynamicEffect_estimator.load_from_checkpoint(checkpoint_callback.best_model_path, 
-    #                                                      args=args, 
-    #                                                      true_effect=hddataset.true_effect)
 
     test_loader = DataLoader(data_pipeline.test_data, batch_size=args.exp.batch_size, shuffle=False, num_workers=args.exp.num_workers, drop_last=False)
-    predictions_de = trainer_de.predict(de_est, test_loader)
-    predicted_de = torch.cat([pred for pred in predictions_de], dim = 0)
+    predictions_blip = trainer_blip.predict(de_est, test_loader)
+    predicted_blip = torch.cat([pred for pred in predictions_blip], dim = 0)
 
     #When individual true dynamic effect is available, log the mse / plot distribution
     if data_pipeline.gt_dynamic_effect_available:
         if data_pipeline.name == 'linear_markovian_heterodynamic':
             individual_true_effect = data_pipeline.compute_individual_true_dynamic_effects(X = data_pipeline.test_data.X_dynamic)
             if (len(args.dataset.hetero_inds) == 0) or (args.dataset.hetero_inds == None): #Only for Non-hetero estimation
-                plot_de_est_distribution(mlf_logger_de, predicted_de, data_pipeline.true_effect, args)
+                plot_blip_est_distribution(mlf_logger_blip, predicted_blip, data_pipeline.true_effect, args)
             else:
-                plot_de_est_diff_distribution(mlf_logger_de, predicted_de, individual_true_effect, args)
+                plot_blip_est_diff_distribution(mlf_logger_blip, predicted_blip, individual_true_effect, args)
         elif data_pipeline.name == 'MIMIC-III Semi-Synthetic Data Pipeline':
             if data_pipeline.true_effect is not None:
-                plot_de_est_distribution(mlf_logger_de, predicted_de, data_pipeline.true_effect, args)
+                plot_blip_est_distribution(mlf_logger_blip, predicted_blip, data_pipeline.true_effect, args)
             elif data_pipeline.true_effect_hetero_multiplier is not None:
                 logger.info("Plotting distribution of difference between dynamic effect estimates and ground truth values")
                 ind_true_effect = compute_gt_individual_dynamic_effects(args, data_pipeline, subset = 'test')
-                plot_de_est_diff_distribution(mlf_logger_de, predicted_de, ind_true_effect, args)
+                plot_blip_est_diff_distribution(mlf_logger_blip, predicted_blip, ind_true_effect, args)
             else:
                 raise NotImplementedError("individual true effect is not available for MIMIC-III Semi-Synthetic Data Pipeline")
     
@@ -209,12 +205,12 @@ def main(args: DictConfig):
     logger.info(f"Interved treatment (discrete and continuous): \n {T_intv_disc} \n {T_intv_cont}")
     logger.info(f"Baseline treatment (discrete and continuous): \n {T_base_disc} \n {T_base_cont}")
 
-    predicted_te = de_est.predict_treatment_effect(predicted_de, T_intv_disc, T_intv_cont, T_base_disc, T_base_cont)
+    predicted_te = de_est.predict_treatment_effect(predicted_blip, T_intv_disc, T_intv_cont, T_base_disc, T_base_cont)
     gt_te = data_pipeline.compute_treatment_effect('test', T_intv_disc, T_intv_cont, T_base_disc, T_base_cont)
     #Compute mse in entries where bother predicted_te and gt_te are not nan (both numpy arrays)
     mask =(~np.isnan(predicted_te)) & (~np.isnan(gt_te))
     mse = ((predicted_te[mask] - gt_te[mask]) ** 2).mean()
-    mlf_logger_de.log_metrics({"TE_mean":mse})
+    mlf_logger_blip.log_metrics({"TE_mean":mse})
     
 if __name__ == "__main__":
     main()

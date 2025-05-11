@@ -15,6 +15,7 @@ from typing import List, Tuple
 
 from src.models.utils_transformer import AbsolutePositionalEncoding, RelativePositionalEncoding, TransformerMultiInputBlock
 from src.models.basic_blocks import BRTreatmentOutcomeHead
+from src.models.utils import bce
 
 logger = logging.getLogger(__name__)
 
@@ -145,9 +146,99 @@ class Causal_transformer(LightningModule):
 
         return treatment_pred, outcome_pred, br
     
+    def training_step(self, batch, batch_ind, optimizer_idx=0):
+        for par in self.parameters():
+            par.requires_grad = True
+
+        if optimizer_idx == 0 or self.br_treatment_outcome_head.alpha==0.0:  # grad reversal or domain confusion representation update
+            if self.args.model.weights_ema:
+                with self.ema_treatment.average_parameters():
+                    treatment_pred, outcome_pred, _ = self(batch)
+            else:
+                treatment_pred, outcome_pred, _ = self(batch)
+
+            mse_loss = F.mse_loss(outcome_pred, batch['curr_outputs'], reduce=False)
+            if self.balancing == 'grad_reverse':
+                bce_loss = self.bce_loss(treatment_pred, batch['current_treatments'].double(), kind='predict')
+            elif self.balancing == 'domain_confusion':
+                bce_loss = self.bce_loss(treatment_pred, batch['current_treatments'].double(), kind='confuse')
+                bce_loss = self.br_treatment_outcome_head.alpha * bce_loss
+            else:
+                raise NotImplementedError()
+
+            # Masking for shorter sequences
+            # Attention! Averaging across all the active entries (= sequence masks) for full batch
+            bce_loss = (batch['active_entries'].squeeze(-1) * bce_loss).sum() / batch['active_entries'].sum()
+            mse_loss = (batch['active_entries'] * mse_loss).sum() / batch['active_entries'].sum()
+
+            loss = bce_loss + mse_loss
+
+            self.log(f'{self.model_type}_train_loss', loss, on_epoch=True, on_step=False, sync_dist=True)
+            self.log(f'{self.model_type}_train_bce_loss', bce_loss, on_epoch=True, on_step=False, sync_dist=True)
+            self.log(f'{self.model_type}_train_mse_loss', mse_loss, on_epoch=True, on_step=False, sync_dist=True)
+            self.log(f'{self.model_type}_alpha', self.br_treatment_outcome_head.alpha, on_epoch=True, on_step=False,
+                     sync_dist=True)
+
+            return loss
+
+        elif optimizer_idx == 1:  # domain classifier update
+            if self.hparams.exp.weights_ema:
+                with self.ema_non_treatment.average_parameters():
+                    treatment_pred, _, _ = self(batch, detach_treatment=True)
+            else:
+                treatment_pred, _, _ = self(batch, detach_treatment=True)
+
+            bce_loss = self.bce_loss(treatment_pred, batch['current_treatments'].double(), kind='predict')
+            if self.balancing == 'domain_confusion':
+                bce_loss = self.br_treatment_outcome_head.alpha * bce_loss
+
+            # Masking for shorter sequences
+            # Attention! Averaging across all the active entries (= sequence masks) for full batch
+            bce_loss = (batch['active_entries'].squeeze(-1) * bce_loss).sum() / batch['active_entries'].sum()
+            self.log(f'{self.model_type}_train_bce_loss_cl', bce_loss, on_epoch=True, on_step=False, sync_dist=True)
+
+            return bce_loss
+        
+
+    def bce_loss(self, treatment_pred, current_treatments, kind='predict'):
+        mode = self.hparams.dataset.treatment_mode
+        bce_weights = torch.tensor(self.bce_weights).type_as(current_treatments) if self.hparams.exp.bce_weight else None
+
+        if kind == 'predict':
+            bce_loss = bce(treatment_pred, current_treatments, mode, bce_weights)
+        elif kind == 'confuse':
+            uniform_treatments = torch.ones_like(current_treatments)
+            if mode == 'multiclass':
+                uniform_treatments *= 1 / current_treatments.shape[-1]
+            elif mode == 'multilabel':
+                uniform_treatments *= 0.5
+            bce_loss = bce(treatment_pred, uniform_treatments, mode)
+        else:
+            raise NotImplementedError()
+        return bce_loss
+    
+    def _calculate_bce_weights(self) -> None:
+        if self.hparams.dataset.treatment_mode == 'multiclass':
+            current_treatments = self.dataset_collection.train_f.data['current_treatments']
+            current_treatments = current_treatments.reshape(-1, current_treatments.shape[-1])
+            current_treatments = current_treatments[self.dataset_collection.train_f.data['active_entries'].flatten().astype(bool)]
+            current_treatments = np.argmax(current_treatments, axis=1)
+
+            self.bce_weights = len(current_treatments) / np.bincount(current_treatments) / len(np.bincount(current_treatments))
+        else:
+            raise NotImplementedError()
+
+    def on_fit_start(self) -> None:  # Issue with logging not yet existing parameters in MlFlow
+        if self.trainer.logger is not None:
+            self.trainer.logger.filter_submodels = list(self.possible_model_types - {self.model_type})
+
+    def on_fit_end(self) -> None:  # Issue with logging not yet existing parameters in MlFlow
+        if self.trainer.logger is not None:
+            self.trainer.logger.filter_submodels = list(self.possible_model_types)
+    
 
     def configure_optimizers(self):
-        if self.balancing == 'grad_reverse' and not self.hparams.exp.weights_ema:  # one optimizer
+        if self.balancing == 'grad_reverse' and not self.args.model.weights_ema:  # one optimizer
             optimizer = self._get_optimizer(list(self.named_parameters()))
 
             if self.hparams.model[self.model_type]['optimizer']['lr_scheduler']:
@@ -168,7 +259,7 @@ class Causal_transformer(LightningModule):
             non_treatment_head_params = [(k, v) for k, v in dict(self.named_parameters()).items()
                                          if k in non_treatment_head_params]
 
-            if self.hparams.exp.weights_ema:
+            if self.args.weights_ema:
                 self.ema_treatment = ExponentialMovingAverage([par[1] for par in treatment_head_params],
                                                               decay=self.hparams.exp.beta)
                 self.ema_non_treatment = ExponentialMovingAverage([par[1] for par in non_treatment_head_params],
@@ -177,10 +268,44 @@ class Causal_transformer(LightningModule):
             treatment_head_optimizer = self._get_optimizer(treatment_head_params)
             non_treatment_head_optimizer = self._get_optimizer(non_treatment_head_params)
 
-            if self.hparams.model[self.model_type]['optimizer']['lr_scheduler']:
+            if self.args.model['optimizer']['lr_scheduler']:
                 return self._get_lr_schedulers([non_treatment_head_optimizer, treatment_head_optimizer])
 
             return [non_treatment_head_optimizer, treatment_head_optimizer]
+    
+    def _get_optimizer(self, param_optimizer: list):
+        no_decay = ['bias', 'layer_norm']
+        sub_args = self.arg.model
+        optimizer_grouped_parameters = [
+            {
+                'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)],
+                'weight_decay': sub_args['optimizer']['weight_decay'],
+            },
+            {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0},
+        ]
+        lr = sub_args['optimizer']['learning_rate']
+        optimizer_cls = sub_args['optimizer']['optimizer_cls']
+        if optimizer_cls.lower() == 'adamw':
+            optimizer = optim.AdamW(optimizer_grouped_parameters, lr=lr)
+        elif optimizer_cls.lower() == 'adam':
+            optimizer = optim.Adam(optimizer_grouped_parameters, lr=lr)
+        elif optimizer_cls.lower() == 'sgd':
+            optimizer = optim.SGD(optimizer_grouped_parameters, lr=lr,
+                                  momentum=sub_args['optimizer']['momentum'])
+        else:
+            raise NotImplementedError()
+
+        return optimizer
+    
+    def _get_lr_schedulers(self, optimizer):
+        if not isinstance(optimizer, list):
+            lr_scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.99)
+            return [optimizer], [lr_scheduler]
+        else:
+            lr_schedulers = []
+            for opt in optimizer:
+                lr_schedulers.append(optim.lr_scheduler.ExponentialLR(opt, gamma=0.99))
+            return optimizer, lr_schedulers
     
 
         

@@ -1,5 +1,6 @@
 from omegaconf import DictConfig
 import numpy as np
+import torch.nn.functional as F
 from torch.autograd import Function
 from torch.utils.data import Dataset, random_split
 import matplotlib.pyplot as plt
@@ -83,7 +84,7 @@ def log_param_est_rmse(mlf_logger, param_pred, true_effect, args):
     return metrics
 
 
-def plot_de_est_distribution(mlf_logger, param_pred, true_effect, args):
+def plot_blip_est_distribution(mlf_logger, param_pred, true_effect, args):
     """
     distribution of dynamic effects
     Args:
@@ -128,17 +129,26 @@ def plot_de_est_distribution(mlf_logger, param_pred, true_effect, args):
     plt.close(fig)
     return
 
-def plot_de_est_diff_distribution(mlf_logger, param_pred, individual_true_effect, args):
+def plot_blip_est_diff_distribution(mlf_logger, param_pred, individual_true_effect, args, artifacts_path: str = None):
     """
     plot distribution of the difference between estimated and true effect on a individual level
     Args:
         param_pred: torch.Tensor of shape [D, SL - m + 1, m, n_t]
         individual_true_effect: numpy array of shape [D, SL - m + 1, m, n_t]
+        args: DictConfig object containing experiment configurations.
+        artifacts_path: Path to the directory where artifacts should be saved.
     results logged to mlflow
     """
     logger.info("Visualising param estimation on an individual level")
     param_pred_np = param_pred.detach().cpu().numpy()
     te_diff = param_pred_np - individual_true_effect
+
+    if artifacts_path:
+        te_diff_filename = "te_diff_individual.npy"
+        te_diff_filepath = os.path.join(artifacts_path, te_diff_filename)
+        np.save(te_diff_filepath, te_diff)
+        logger.info(f"Saved individual te_diff to {te_diff_filepath}")
+
     m = args.dataset.n_periods
     n_t = individual_true_effect.shape[-1]
     fig, axes = plt.subplots(nrows=m, ncols=n_t, figsize=(4 * n_t, 3 * m), sharex=False, sharey=False)
@@ -161,6 +171,7 @@ def plot_de_est_diff_distribution(mlf_logger, param_pred, individual_true_effect
         mlflow.set_tracking_uri(args.exp.mlflow_uri)
         with mlflow.start_run(run_id=mlf_logger.run_id, nested=True):
             mlflow.log_figure(fig, "de_est_hist_hetero.png")
+            mlflow.log_artifact(te_diff_filepath)
     plt.close(fig)
     return
     
@@ -265,4 +276,14 @@ def grad_reverse(x, scale=1.0):
             return scale * grad_output.neg()
 
     return ReverseGrad.apply(x)
+
+
+def bce(treatment_pred, current_treatments, mode, weights=None):
+    if mode == 'multiclass':
+        return F.cross_entropy(treatment_pred.permute(0, 2, 1), current_treatments.permute(0, 2, 1), reduce=False, weight=weights)
+    elif mode == 'multilabel':
+        return F.binary_cross_entropy_with_logits(treatment_pred, current_treatments, reduce=False, weight=weights).mean(dim=-1)
+    else:
+        raise NotImplementedError()
+
 
