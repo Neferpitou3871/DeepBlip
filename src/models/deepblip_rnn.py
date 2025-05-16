@@ -479,9 +479,10 @@ class BlipPrediction_Network(LightningModule):
             active_entries = batch['active_entries'][:, self.n_periods - 1:].unsqueeze(-1).unsqueeze(-1).expand(
                                                         -1, -1, self.n_periods, self.n_treatments)
             true_effect_mse = (true_effect_mse * active_entries).mean()
-        loss += true_effect_mse * self.lambda_mse
+        #loss += true_effect_mse * self.lambda_mse
+        loss = true_effect_mse
 
-        self.log('train_loss_param', loss, on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
+        self.log('train_loss_blip', loss, on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
 
         if self.true_effect is not None:
             metrics = self.true_effect_rmse(param_pred_all_steps)
@@ -516,7 +517,7 @@ class BlipPrediction_Network(LightningModule):
         else:
             raise ValueError(f"illegal loss type: {self.loss_type}")
 
-        self.log('val_loss_param', loss, on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
+        self.log('val_loss_blip', loss, on_epoch=True, on_step=True, sync_dist=True, prog_bar=True)
 
         if self.true_effect is not None:
             metrics = self.true_effect_rmse(param_pred_all_steps)
@@ -640,7 +641,7 @@ class BlipPrediction_Network(LightningModule):
                 'interval': 'epoch',
                 'frequency': 1,
                 'reduce_on_plateau': False,
-                'monitor': 'val_loss_param_epoch',
+                'monitor': 'val_loss_blip_epoch',
             }
         }
     

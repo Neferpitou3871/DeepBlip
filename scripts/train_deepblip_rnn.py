@@ -193,7 +193,7 @@ def main(args: DictConfig):
             elif data_pipeline.true_effect_hetero_multiplier is not None:
                 logger.info("Plotting distribution of difference between dynamic effect estimates and ground truth values")
                 ind_true_effect = compute_gt_individual_dynamic_effects(args, data_pipeline, subset = 'test')
-                plot_blip_est_diff_distribution(mlf_logger_blip, predicted_blip, ind_true_effect, args)
+                plot_blip_est_diff_distribution(mlf_logger_blip, predicted_blip, ind_true_effect, args, artifacts_path=artifacts_path_blip)
             else:
                 raise NotImplementedError("individual true effect is not available for MIMIC-III Semi-Synthetic Data Pipeline")
     

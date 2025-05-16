@@ -3,7 +3,7 @@ sys.path.append(os.path.abspath(os.path.join(os.getcwd(), '..')))
 import hydra
 import torch
 import numpy as np
-from src.models.dml_rnn import Nuisance_Network, DynamicEffect_estimator
+from src.models.deepblip_rnn import Nuisance_Network, DynamicEffect_estimator
 from omegaconf import DictConfig, OmegaConf
 from hydra.utils import instantiate
 #import lightning trainer

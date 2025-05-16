@@ -5,6 +5,7 @@ __pycache__/
 *.log
 *.tmp
 *.swp
+*.tex
 
 #other directories / output
 .vscode/
@@ -20,6 +21,7 @@ scripts/old_train_dml_rnn.py
 scripts/in_place.py
 scripts/eval_de_dmlrnn.py
 scripts/eval_treatment_effect.py
+scripts/discussion.tex
 
 #temp files
 draft.tex

@@ -13,7 +13,7 @@ checkpoint:
   save: True
   top_k: 1
   monitor_nuisance: 'val_loss'
-  monitor_de: 'val_loss_param'
+  monitor_blip: 'val_loss_blip'
 
 defaults:
   - _self_

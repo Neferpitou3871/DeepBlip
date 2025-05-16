@@ -146,7 +146,8 @@ def plot_blip_est_diff_distribution(mlf_logger, param_pred, individual_true_effe
     if artifacts_path:
         te_diff_filename = "te_diff_individual.npy"
         te_diff_filepath = os.path.join(artifacts_path, te_diff_filename)
-        np.save(te_diff_filepath, te_diff)
+        with open(te_diff_filepath, 'wb') as f:
+            np.save(f, te_diff)
         logger.info(f"Saved individual te_diff to {te_diff_filepath}")
 
     m = args.dataset.n_periods
