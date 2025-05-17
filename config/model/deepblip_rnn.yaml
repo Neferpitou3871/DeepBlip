@@ -37,4 +37,4 @@ exp:
     - "33f0650f27724521bdf276267f2ca051"
   resume_train: False
   use_regression_residual: False
-  residual_dir: 'C:\Users\mhr_k\OneDrive\Documents\Thesis\Neural-R-Learner\mlruns\819398713364716680\3da1695f9b94424b87c1ef07fa8dfbdb\artifacts'
+  residual_dir: 'C:\Users\User\OneDrive\Documents\Thesis\Neural-R-Learner\mlruns\819398713364716680\3da1695f9b94424b87c1ef07fa8dfbdb\artifacts'

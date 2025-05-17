@@ -3,7 +3,7 @@ dataset:
   _target_: src.data.mimic.semi_synthetic_pipeline.MIMICSemiSyntheticDataPipeline
   seed: 2025
   name: mimic3_synthetic
-  path: 'C:\Users\mhr_k\Data\mimic_extract\all_hourly_data_1000.h5'                  # Path with MIMIC-3 dataset (HDFStore)
+  path: 'C:\Users\User\Data\mimic_extract\all_hourly_data_1000.h5'                  # Path with MIMIC-3 dataset (HDFStore)
   min_seq_length: 10                                        # Min sequence length in cohort
   max_seq_length: 31                                       # Max sequence length in cohort
   max_number: 100                                          # Maximum number of patients in cohort

@@ -684,7 +684,7 @@ def prepare_synthetic_mimic_dataset(args_dataset:DictConfig):
 
 
 if __name__ == '__main__':
-    dataset_config_path = r'C:\Users\mhr_k\OneDrive\Documents\Thesis\Neural-R-Learner\config\dataset\mimic_synthetic_debug.yaml'
+    dataset_config_path = r'C:\Users\User\OneDrive\Documents\Thesis\Neural-R-Learner\config\dataset\mimic_synthetic_debug.yaml'
     args_dataset = OmegaConf.load(dataset_config_path).dataset
     treatments_seq = np.array([
         [1, 0],[0, 1],[1, 1]
