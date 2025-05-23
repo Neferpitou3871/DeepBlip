@@ -46,6 +46,12 @@ class VariationalLSTM(nn.Module):
 
         return x
     
+
+    def encode(self, prev_treatments, vitals, prev_outputs, static_features, active_entries, init_states=None):
+        static_features = static_features.unsqueeze(1).expand(-1, prev_treatments.size(1), -1)
+        x = torch.cat([static_features, vitals, prev_treatments, prev_outputs.unsqueeze(-1)], dim=-1)
+        return self.forward(x, init_states=init_states)
+
     def single_step(self, x, hidden_states):
         """
         Process one time step through all layers using the provided hidden states.

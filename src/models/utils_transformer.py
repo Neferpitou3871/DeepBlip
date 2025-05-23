@@ -321,3 +321,105 @@ class TransformerMultiInputBlock(nn.Module):
             out_v = self.feed_forwards[2](x_vt_ + x_vo_ + x_s)
 
             return out_t, out_o, out_v
+
+
+class Transformer(nn.Module):
+    """
+    Transformer-based backbone with interface similar to VariationalLSTM
+    """
+    def __init__(self, input_size, hidden_size, num_layer=1, num_heads=2, dropout_rate=0.0, relative_position=10, trainable=True,):
+        super().__init__()
+        
+        self.input_size = input_size
+        self.hidden_size = hidden_size  # This will be the seq_hidden_units in transformer terminology
+        self.num_layer = num_layer
+        self.dropout_rate = dropout_rate
+        
+        self.num_heads = num_heads
+        self.head_size = self.hidden_size // self.num_heads
+
+        self.treatments_input_transformation = nn.Linear(self.dim_treatments, self.seq_hidden_units)
+        self.vitals_input_transformation = nn.Linear(self.dim_vitals, self.seq_hidden_units)
+        self.output_input_transformation = nn.Linear(1, self.seq_hidden_units)
+        self.static_input_transformation = nn.Linear(self.dim_static_features, self.seq_hidden_units)
+        
+        # Input projection
+        self.input_transformation = nn.Linear(self.input_size, self.hidden_size)
+        
+        # Positional encoding
+        self.max_seq_len = 50  # Make this configurable based on expected sequence length
+        self.relative_position = relative_position  # Relative position window size
+        self.self_positional_encoding = RelativePositionalEncoding(self.relative_position, self.head_size, trainable=trainable)
+        self.self_positional_encoding_k = RelativePositionalEncoding(self.relative_position, self.head_size, trainable=trainable)
+        self.self_positional_encoding_v = RelativePositionalEncoding(self.relative_position, self.head_size, trainable=trainable)
+
+        # Transformer blocks
+        self.transformer_blocks = nn.ModuleList([
+            TransformerMultiInputBlock(
+                self.hidden_size,
+                self.num_heads,
+                self.head_size,
+                self.hidden_size * 4,  # FFN hidden dimension
+                self.dropout_rate,
+                self.dropout_rate,
+                self_positional_encoding_k=self.self_positional_encoding_k,
+                self_positional_encoding_v=self.self_positional_encoding_v,
+                n_inputs=1,  # Single input type
+                disable_cross_attention=False,
+                isolate_subnetwork='_'
+            ) for _ in range(num_layer)
+        ])
+        
+        # Final layer normalization
+        self.layer_norm = nn.LayerNorm(self.hidden_size)
+        
+    def encode(self, prev_treatments, vitals, prev_outputs, static_features, active_entries, init_states=None):
+
+        active_entries_treat_outcomes = torch.clone(active_entries)
+        active_entries_vitals = torch.clone(active_entries)
+        T = prev_treatments.size(1)
+
+        x_t = self.treatments_input_transformation(prev_treatments)
+        x_o = self.output_input_transformation(prev_outputs.unsqueeze(-1))
+        x_v = self.vitals_input_transformation(vitals) if self.has_vitals else None
+        x_s = self.static_input_transformation(static_features.unsqueeze(1)).expand(-1, T, -1)
+
+        for block in self.transformer_blocks:
+            if self.self_positional_encoding is not None:
+                x_t = x_t + self.self_positional_encoding(x_t)
+                x_o = x_o + self.self_positional_encoding(x_o)
+                x_v = x_v + self.self_positional_encoding(x_v) if self.has_vitals else None 
+            
+            x_t, x_o, x_v = block((x_t, x_o, x_v), x_s, active_entries_treat_outcomes, active_entries_vitals)
+
+        x = (x_t + x_o + x_v) / 3 if self.has_vitals else (x_t + x_o) / 2
+        x = self.output_dropout(x)
+        hr = nn.ELU()(self.hr_output_transformation(x))
+
+        return hr
+    
+    def single_step(self, x, hidden_states):
+        """
+        Process one time step (for compatibility, but transformer processes the whole sequence)
+        
+        Args:
+            x: Input tensor of shape (batch_size, input_size)
+            hidden_states: Previous hidden states (unused in transformer)
+            
+        Returns:
+            output: Output tensor for this timestep
+            new_hidden_states: New hidden states (same as input for compatibility)
+        """
+        batch_size, _ = x.shape
+        
+        # Add sequence dimension
+        x = x.unsqueeze(1)  # (batch_size, 1, input_size)
+        
+        # Apply transformer
+        output = self.forward(x)  # (batch_size, 1, hidden_size)
+        
+        # Remove sequence dimension
+        output = output.squeeze(1)  # (batch_size, hidden_size)
+        
+        # Return output and same hidden states (for API compatibility)
+        return output, hidden_states

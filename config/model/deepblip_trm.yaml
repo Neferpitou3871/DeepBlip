@@ -2,8 +2,9 @@
 model:
   static_treatment_policy: [0, 0, 0]
   phi_type: 'current_treatment'
-  backbone: 'rnn' # 'transformer' or 'rnn'
+  backbone: 'transformer' # 'transformer' or 'rnn'
   hidden_size: 50
+  num_heads: 2
   num_layer: 1
   hr_size: 30
   dropout_rate: 0.1
@@ -14,6 +15,9 @@ model:
   loss_type: 'moment'  #moment or OLS
   moment_order: 1 # 1 for L1, 2 for L2-norm in moment loss
   double_opt: True
+  positional_encoding:
+    trainable: True
+    max_relative_position: 10
 
   optimizer:
     optimizer_cls: adam
