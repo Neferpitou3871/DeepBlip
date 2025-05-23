@@ -2,6 +2,7 @@
 model:
   hidden_size: 50
   num_layer: 1
+  num_heads: 2
   hr_size: 30
   dropout_rate: 0.1
   fc_hidden_size: 25

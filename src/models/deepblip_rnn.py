@@ -58,7 +58,7 @@ class Nuisance_Network(LightningModule):
         self.fc_hidden_size_q = args.model.fc_hidden_size_q
         #self.dim_phi = args.model.dim_phi
         #assert self.dim_phi == self.n_treatments
-
+        
         self.lstm = VariationalLSTM(self.input_size, self.hidden_size, self.num_layer, self.dropout_rate)
         self.hr_output_transformation = nn.Linear(self.hidden_size, self.hr_size)
         self.output_dropout = nn.Dropout(self.dropout_rate)
