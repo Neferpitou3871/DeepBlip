@@ -10,7 +10,7 @@ from pytorch_lightning import Trainer
 from pytorch_lightning.utilities.seed import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from src.utils import FilteringMlFlowLogger
-from src.models.deepblip_rnn import Nuisance_Network, BlipPrediction_Network
+from src.models.deepblip import Nuisance_Network, BlipPrediction_Network
 from src.models.utils import evaluate_nuisance_mse, plot_residual_distribution, plot_blip_est_distribution, transform_residual_data, plot_blip_est_diff_distribution
 from src.utils import compute_gt_individual_dynamic_effects
 import pickle

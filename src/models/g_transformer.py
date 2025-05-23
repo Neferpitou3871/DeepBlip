@@ -61,7 +61,7 @@ class G_transformer(LightningModule):
         self.num_layer = args.model.num_layer
         self.num_heads = args.model.num_heads
         self.pe_trainable = args.model.positional_encoding.trainable
-        self.relative_position = args.model.max_relative_position
+        self.relative_position = args.model.positional_encoding.max_relative_position
 
         self.head_size = self.seq_hidden_units // self.num_heads
         
@@ -95,7 +95,7 @@ class G_transformer(LightningModule):
         self.G_comp_heads = nn.ModuleList(
             [OutcomeHead_GRNN(self.seq_hidden_units, self.hr_size, self.fc_hidden_units, self.dim_treatments, 1)
              for _ in range(self.projection_horizon + 1)]
-        )
+        )s
 
 
     def build_hr(self, prev_treatments, vitals, prev_outputs, static_features, active_entries):

@@ -11,6 +11,7 @@ import logging
 import mlflow
 
 from src.models.utils_lstm import VariationalLSTM
+from src.models.utils_transformer import AbsolutePositionalEncoding, RelativePositionalEncoding, TransformerMultiInputBlock, Transformer
 from src.models.basic_blocks import OutcomeHead
 from src.models.utils import build_phi
 
@@ -50,16 +51,21 @@ class Nuisance_Network(LightningModule):
     
     def _initialize_model(self, args: DictConfig):
 
+        self.backbone_type = args.model.backbone
         self.hidden_size = args.model.hidden_size
         self.hr_size = args.model.hr_size
         self.num_layer = args.model.num_layer
         self.dropout_rate = args.model.dropout_rate
         self.fc_hidden_size_p = args.model.fc_hidden_size_p
         self.fc_hidden_size_q = args.model.fc_hidden_size_q
-        #self.dim_phi = args.model.dim_phi
-        #assert self.dim_phi == self.n_treatments
         
-        self.lstm = VariationalLSTM(self.input_size, self.hidden_size, self.num_layer, self.dropout_rate)
+        if self.backbone_type == 'rnn':
+            self.sequential_encoder = VariationalLSTM(self.input_size, self.hidden_size, self.num_layer, self.dropout_rate)
+        elif self.backbone_type == 'transformer':
+            self.sequential_encoder = Transformer(self.input_size, self.hidden_size, self.num_layer, self.dropout_rate)
+        else:
+            raise ValueError(f"Unsupported backbone type: {self.backbone_type}")
+
         self.hr_output_transformation = nn.Linear(self.hidden_size, self.hr_size)
         self.output_dropout = nn.Dropout(self.dropout_rate)
         self.p_comp_head = nn.ModuleList([
@@ -73,14 +79,11 @@ class Nuisance_Network(LightningModule):
         ])
     
 
-    def build_hr(self, static_features, curr_covariates, prev_treatments, prev_outputs):
+    def build_hr(self, static_features, curr_covariates, prev_treatments, prev_outputs, active_entries=None):
         """
         Build hidden representation (patient clinical state)
         """
-        #expand static_features along the time dimension (b, n_static) -> (b, L, n_static)
-        static_features = static_features.unsqueeze(1).expand(-1, self.sequence_length, -1)   
-        x = torch.cat([static_features, curr_covariates, prev_treatments, prev_outputs.unsqueeze(-1)], dim = -1)
-        x = self.lstm(x, init_states=None)
+        x = self.sequential_encoder.encode(prev_treatments, curr_covariates, prev_outputs, static_features, active_entries, init_states=None)
         output = self.output_dropout(x)
         hr = nn.ELU()(self.hr_output_transformation(output))
         return hr
@@ -329,10 +332,15 @@ class BlipPrediction_Network(LightningModule):
         self.num_layer = args.model.num_layer
         self.dropout_rate = args.model.dropout_rate
         self.fc_hidden_size_psi = args.model.fc_hidden_size_psi
-        #self.dim_phi = args.model.dim_phi
-        #assert self.dim_phi == self.n_treatments
-
-        self.lstm = VariationalLSTM(self.input_size, self.hidden_size, self.num_layer, self.dropout_rate)
+        
+        self.backbone_type = args.model.backbone
+        if self.backbone_type == 'rnn':
+            self.sequential_encoder = VariationalLSTM(self.input_size, self.hidden_size, self.num_layer, self.dropout_rate)
+        elif self.backbone_type == 'transformer':
+            self.sequential_encoder = Transformer(self.input_size, self.hidden_size, self.num_layer, self.dropout_rate)
+        else:
+            raise ValueError(f"Unsupported backbone type: {self.backbone_type}")
+            
         self.hr_output_transformation = nn.Linear(self.hidden_size, self.hr_size)
         self.output_dropout = nn.Dropout(self.dropout_rate)
         self.parameter_head = nn.ModuleList([
@@ -340,13 +348,12 @@ class BlipPrediction_Network(LightningModule):
         ])
     
 
-    def build_hr(self, static_features, curr_covariates, prev_treatments, prev_outputs):
+    def build_hr(self, static_features, curr_covariates, prev_treatments, prev_outputs, active_entries=None):
         """
         Build hidden representation (patient clinical state)
         """
-        static_features = static_features.unsqueeze(1).expand(-1, self.sequence_length, -1)
-        x = torch.cat([static_features, curr_covariates, prev_treatments, prev_outputs.unsqueeze(-1)], dim = -1)
-        x = self.lstm(x, init_states=None)
+        x = self.sequential_encoder.encode(prev_treatments, curr_covariates, prev_outputs, 
+                                           static_features, active_entries=active_entries, init_states=None)
         output = self.output_dropout(x)
         hr = nn.ELU()(self.hr_output_transformation(output))
         return hr
@@ -468,7 +475,7 @@ class BlipPrediction_Network(LightningModule):
         elif self.loss_type == 'moment':
             moment_losses = self.moment_loss(param_pred_all_steps, param_pred_all_steps_detach, res_Y_all_steps, res_T_all_steps)
             loss = moment_losses.mean()
-            for i in range(self.n_periods):
+            for i in range (self.n_periods):
                 self.log(f'train_norm{i}', moment_losses[i].detach().cpu(), on_epoch=True, on_step=False, sync_dist=True, prog_bar=False)
         else:
             raise ValueError(f"illegal loss type: {self.loss_type}")
@@ -656,26 +663,6 @@ class BlipPrediction_Network(LightningModule):
         else:
             assert T_disc.shape[:-1] == T_cont.shape[:-1]
             return np.concatenate([T_disc, T_cont], axis = -1)
-
-        
-
-
-
-
-    
-
-
-        
-
-
-
-
-
-    
-
-
-
-
 
 
 
